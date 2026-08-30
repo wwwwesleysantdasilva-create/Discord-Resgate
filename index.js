@@ -11,12 +11,11 @@ const {
     ContainerBuilder,
     TextDisplayBuilder,
     MessageFlags,
-    ApplicationCommandOptionType,
     PermissionFlagsBits
 } = require('discord.js');
 const axios = require('axios');
 const sqlite3 = require('sqlite3').verbose();
-const crypto = require('crypto'); // Utilizado para gerar keys aleatórias seguras
+const crypto = require('crypto');
 
 const client = new Client({ 
     intents: [
@@ -32,19 +31,37 @@ const db = new sqlite3.Database("./loja.sqlite", (err) => {
     else console.log("📦 Banco de dados conectado com sucesso!");
 });
 
+// Criação das tabelas necessárias (Keys, Produtos e Admins)
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS keys (
         codigo TEXT UNIQUE, 
         telegram_group_id TEXT, 
         usada INTEGER DEFAULT 0
     )`);
+    db.run(`CREATE TABLE IF NOT EXISTS produtos (
+        nome TEXT UNIQUE, 
+        telegram_group_id TEXT
+    )`);
+    db.run(`CREATE TABLE IF NOT EXISTS admins (
+        user_id TEXT UNIQUE
+    )`);
 });
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
-// Comando de Texto (Apenas para o Painel)
+// Função auxiliar para verificar se é admin (Donos do servidor ou cadastrados no banco)
+async function checarAdmin(interaction) {
+    if (interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return true;
+    
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM admins WHERE user_id = ?`, [interaction.user.id], (err, row) => {
+            resolve(!!row);
+        });
+    });
+}
+
+// Comando de Texto (Painel de Resgate para Clientes)
 client.on('messageCreate', async (message) => {
-    // Transformei em toLowerCase() para aceitar tanto !painel quanto !Painel
     if (message.content.toLowerCase() === '!painel' && message.member.permissions.has(PermissionFlagsBits.Administrator)) {
         
         const container = new ContainerBuilder()
@@ -71,31 +88,151 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
     
-    // --- COMANDOS DE BARRA (SLASH COMMANDS) ---
-    if (interaction.isChatInputCommand()) {
-        if (interaction.commandName === 'gerarkey') {
-            const grupoId = interaction.options.getString('grupo');
-            const quantidade = interaction.options.getInteger('quantidade') || 1;
-            
-            await interaction.deferReply({ ephemeral: true }); // Responde de forma privada para você
+    // --- SLASH COMMAND: /painel (Painel de Administração) ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'painel') {
+        if (!(await checarAdmin(interaction))) {
+            return interaction.reply({ content: '❌ Você não tem permissão para usar este painel.', ephemeral: true });
+        }
 
-            const keysGeradas = [];
-            
-            for(let i = 0; i < quantidade; i++) {
-                // Gera uma chave no formato SENSI-XXXXXXXX (letras maiúsculas e números)
-                const randomString = crypto.randomBytes(4).toString('hex').toUpperCase(); 
-                const keyFinal = `SENSI-${randomString}`;
-                
-                db.run(`INSERT INTO keys (codigo, telegram_group_id, usada) VALUES (?, ?, 0)`, [keyFinal, grupoId]);
-                // Colocando crases (`) em volta da key para você conseguir copiar com apenas um toque no Discord
-                keysGeradas.push(`\`${keyFinal}\``); 
-            }
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent('## ⚙️ Painel de Configuração da Loja\nGerencie produtos, keys e administradores por aqui.')
+            );
 
-            await interaction.editReply(`✅ **${quantidade} Key(s) gerada(s) com sucesso!**\n\n**ID do Grupo Telegram:** \`${grupoId}\`\n\n**Suas keys:**\n${keysGeradas.join('\n')}`);
+        const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('cfg_gerar_keys').setLabel('Gerar Keys').setStyle(ButtonStyle.Secondary).setEmoji('🔑'),
+            new ButtonBuilder().setCustomId('cfg_add_produto').setLabel('Add Produto').setStyle(ButtonStyle.Success).setEmoji('📦'),
+            new ButtonBuilder().setCustomId('cfg_del_produto').setLabel('Remover Produto').setStyle(ButtonStyle.Danger).setEmoji('🗑️')
+        );
+
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('cfg_add_admin').setLabel('Add Admin').setStyle(ButtonStyle.Primary).setEmoji('➕'),
+            new ButtonBuilder().setCustomId('cfg_del_admin').setLabel('Remover Admin').setStyle(ButtonStyle.Danger).setEmoji('➖')
+        );
+
+        await interaction.reply({
+            components: [container, row1, row2],
+            flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+        });
+    }
+
+    // --- CLIQUES DOS BOTÕES DO PAINEL DE ADMIN ---
+    if (interaction.isButton() && interaction.customId.startsWith('cfg_')) {
+        if (!(await checarAdmin(interaction))) {
+            return interaction.reply({ content: '❌ Acesso negado.', ephemeral: true });
+        }
+
+        const action = interaction.customId;
+
+        if (action === 'cfg_gerar_keys') {
+            const modal = new ModalBuilder().setCustomId('modal_gerar_keys').setTitle('🔑 Gerar Keys');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('produto_nome').setLabel('Nome exato do Produto:').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('quantidade').setLabel('Quantidade (Ex: 1, 5, 10):').setStyle(TextInputStyle.Short).setRequired(true))
+            );
+            return await interaction.showModal(modal);
+        }
+
+        if (action === 'cfg_add_produto') {
+            const modal = new ModalBuilder().setCustomId('modal_add_produto').setTitle('📦 Adicionar Produto');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome do Produto (Ex: Pack Sensi):').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('group_id').setLabel('ID do Grupo Telegram (Ex: -100...):').setStyle(TextInputStyle.Short).setRequired(true))
+            );
+            return await interaction.showModal(modal);
+        }
+
+        if (action === 'cfg_del_produto') {
+            const modal = new ModalBuilder().setCustomId('modal_del_produto').setTitle('🗑️ Remover Produto');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nome').setLabel('Nome exato do Produto a remover:').setStyle(TextInputStyle.Short).setRequired(true))
+            );
+            return await interaction.showModal(modal);
+        }
+
+        if (action === 'cfg_add_admin') {
+            const modal = new ModalBuilder().setCustomId('modal_add_admin').setTitle('➕ Adicionar Administrador');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_id').setLabel('ID do Usuário Discord (do novo admin):').setStyle(TextInputStyle.Short).setRequired(true))
+            );
+            return await interaction.showModal(modal);
+        }
+
+        if (action === 'cfg_del_admin') {
+            const modal = new ModalBuilder().setCustomId('modal_del_admin').setTitle('➖ Remover Administrador');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_id').setLabel('ID do Usuário Discord para remover:').setStyle(TextInputStyle.Short).setRequired(true))
+            );
+            return await interaction.showModal(modal);
         }
     }
 
-    // --- CLIQUE NO BOTÃO DE RESGATE ---
+    // --- TRATAMENTO DOS MODAIS DE ADMIN ---
+    if (interaction.isModalSubmit()) {
+        const id = interaction.customId;
+
+        if (id === 'modal_add_produto') {
+            const nome = interaction.fields.getTextInputValue('nome').trim();
+            const groupId = interaction.fields.getTextInputValue('group_id').trim();
+            
+            db.run(`INSERT OR REPLACE INTO produtos (nome, telegram_group_id) VALUES (?, ?)`, [nome, groupId], (err) => {
+                if (err) return interaction.reply({ content: '❌ Erro ao salvar produto.', ephemeral: true });
+                interaction.reply({ content: `✅ Produto **${nome}** cadastrado com sucesso para o grupo \`${groupId}\`!`, ephemeral: true });
+            });
+        }
+
+        if (id === 'modal_del_produto') {
+            const nome = interaction.fields.getTextInputValue('nome').trim();
+            db.run(`DELETE FROM produtos WHERE nome = ?`, [nome], function(err) {
+                if (this.changes === 0) return interaction.reply({ content: `❌ Produto **${nome}** não encontrado.`, ephemeral: true });
+                interaction.reply({ content: `🗑️ Produto **${nome}** removido com sucesso!`, ephemeral: true });
+            });
+        }
+
+        if (id === 'modal_gerar_keys') {
+            const nomeProduto = interaction.fields.getTextInputValue('produto_nome').trim();
+            const qtd = parseInt(interaction.fields.getTextInputValue('quantidade')) || 1;
+
+            db.get(`SELECT telegram_group_id FROM produtos WHERE nome = ?`, [nomeProduto], async (err, produto) => {
+                if (!produto) {
+                    return interaction.reply({ content: `❌ Produto **${nomeProduto}** não cadastrado! Use "Add Produto" primeiro.`, ephemeral: true });
+                }
+
+                const keysGeradas = [];
+                db.serialize(() => {
+                    const stmt = db.prepare(`INSERT INTO keys (codigo, telegram_group_id, usada) VALUES (?, ?, 0)`);
+                    for (let i = 0; i < qtd; i++) {
+                        const randomString = crypto.randomBytes(4).toString('hex').toUpperCase();
+                        const keyFinal = `SENSI-${randomString}`;
+                        stmt.run(keyFinal, produto.telegram_group_id);
+                        keysGeradas.push(`\`${keyFinal}\``);
+                    }
+                    stmt.finalize();
+                });
+
+                await interaction.reply({ 
+                    content: `✅ **${qtd} Key(s) gerada(s) para [${nomeProduto}]!**\n\n${keysGeradas.join('\n')}`, 
+                    ephemeral: true 
+                });
+            });
+        }
+
+        if (id === 'modal_add_admin') {
+            const userId = interaction.fields.getTextInputValue('user_id').trim();
+            db.run(`INSERT OR IGNORE INTO admins (user_id) VALUES (?)`, [userId], (err) => {
+                interaction.reply({ content: `✅ Usuário \`${userId}`} adicionado como administrador com sucesso!`, ephemeral: true });
+            });
+        }
+
+        if (id === 'modal_del_admin') {
+            const userId = interaction.fields.getTextInputValue('user_id').trim();
+            db.run(`DELETE FROM admins WHERE user_id = ?`, [userId], function(err) {
+                interaction.reply({ content: `➖ Administrador \`${userId}\` removido com sucesso!`, ephemeral: true });
+            });
+        }
+    }
+
+    // --- CLIENTE: CLIQUE NO BOTÃO DE RESGATE DO PACK ---
     if (interaction.isButton() && interaction.customId === 'btn_resgate') {
         const modal = new ModalBuilder()
             .setCustomId('modal_resgate')
@@ -114,24 +251,18 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.showModal(modal);
     }
 
-    // --- ENVIO DO MODAL COM A KEY ---
+    // --- CLIENTE: ENVIO DA KEY NO MODAL ---
     if (interaction.isModalSubmit() && interaction.customId === 'modal_resgate') {
         const keyDigitada = interaction.fields.getTextInputValue('input_key').trim();
         
         await interaction.deferReply({ ephemeral: true });
 
         db.get(`SELECT * FROM keys WHERE codigo = ?`, [keyDigitada], async (err, row) => {
-            if (err) {
-                console.error(err);
-                return interaction.editReply('❌ Ocorreu um erro interno no banco de dados.');
-            }
-
-            if (!row || row.usada === 1) {
+            if (err || !row || row.usada === 1) {
                 return interaction.editReply('❌ **Key inválida ou já utilizada.** Verifique se copiou corretamente.');
             }
 
             try {
-                // Pede o link para o Telegram
                 const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
                     chat_id: row.telegram_group_id,
                     member_limit: 1,
@@ -140,7 +271,6 @@ client.on('interactionCreate', async (interaction) => {
 
                 const linkExclusivo = respostaTelegram.data.result.invite_link;
 
-                // Marca a key como usada
                 db.run(`UPDATE keys SET usada = 1 WHERE codigo = ?`, [keyDigitada]);
 
                 await interaction.editReply(`✅ **Acesso Liberado com Sucesso!**\n\nAqui está o seu link exclusivo para entrar no pack do Telegram. \n⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n🔗 ${linkExclusivo}`);
@@ -156,30 +286,15 @@ client.on('interactionCreate', async (interaction) => {
 client.once('ready', async () => {
     console.log(`🤖 Bot online como: ${client.user.tag}`);
     
-    // Registra os comandos de barra (Slash Commands) no seu servidor
     try {
         await client.application.commands.set([
             {
-                name: 'gerarkey',
-                description: 'Gera chaves de acesso para o pack (Apenas Admins)',
-                defaultMemberPermissions: PermissionFlagsBits.Administrator.toString(),
-                options: [
-                    {
-                        name: 'grupo',
-                        description: 'ID do grupo do Telegram (ex: -100123456789)',
-                        type: ApplicationCommandOptionType.String,
-                        required: true
-                    },
-                    {
-                        name: 'quantidade',
-                        description: 'Quantidade de keys para gerar (padrão: 1)',
-                        type: ApplicationCommandOptionType.Integer,
-                        required: false
-                    }
-                ]
+                name: 'painel',
+                description: 'Abre o painel de configuração administrativo (Apenas Admins)',
+                defaultMemberPermissions: PermissionFlagsBits.Administrator.toString()
             }
         ]);
-        console.log('✅ Comando /gerarkey registrado com sucesso!');
+        console.log('✅ Comando /painel registrado com sucesso!');
     } catch (error) {
         console.error('Erro ao registrar slash commands:', error);
     }
