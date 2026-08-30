@@ -21,10 +21,12 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO COM O SUPABASE (POSTGRESQL)
+// CONEXÃO COM O SUPABASE (POSTGRESQL) - BLINDADO CONTRA ERROS DE REDE DO RAILWAY
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000
 });
 
 async function inicializarBanco() {
