@@ -232,17 +232,32 @@ client.on('interactionCreate', async interaction => {
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
 
+                        // Montagem da DM em Components V2 sem bordas
+                        const containerDM = new ContainerBuilder()
+                            .addTextDisplayComponents(
+                                new TextDisplayBuilder().setContent(
+                                    `<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n` +
+                                    `<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n` +
+                                    `<:emoji_49:1543470661744201868> **| Key utilizada:** \`${keyDigitada}\`\n\n` +
+                                    `Aqui está o seu link exclusivo para entrar no grupo do Telegram:\n\n` +
+                                    `<:warn:1539069654922952774> **Este link serve apenas para 1 pessoa e expira em 15 minutos.**`
+                                )
+                            );
+
+                        const botaoAcessar = new ButtonBuilder()
+                            .setLabel('Acessar o pack')
+                            .setStyle(ButtonStyle.Link)
+                            .setURL(linkExclusivo);
+
+                        const linhaBotaoDM = new ActionRowBuilder().addComponents(botaoAcessar);
+
                         let mensagemDMUrl = '';
                         try {
-                            const msgDM = await interaction.user.send(
-                                `✅ **Acesso Liberado com Sucesso!**\n\n` +
-                                `📦 **Produto:** ${nomeProduto}\n` +
-                                `🔑 **Key utilizada:** \`${keyDigitada}\`\n\n` +
-                                `Aqui está o seu link exclusivo para entrar no grupo do Telegram:\n` +
-                                `⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n` +
-                                `🔗 ${linkExclusivo}`
-                            );
-                            mensagemDMUrl = msgDM.url; // Link direto da mensagem enviada na DM
+                            const msgDM = await interaction.user.send({
+                                components: [containerDM, linhaBotaoDM],
+                                flags: MessageFlags.IsComponentsV2
+                            });
+                            mensagemDMUrl = msgDM.url;
                         } catch (dmError) {
                             return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
                         }
@@ -252,11 +267,11 @@ client.on('interactionCreate', async interaction => {
                             .setStyle(ButtonStyle.Link)
                             .setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`);
 
-                        const linhaBotao = new ActionRowBuilder().addComponents(botaoIrParaDM);
+                        const linhaBotaoEphemeral = new ActionRowBuilder().addComponents(botaoIrParaDM);
 
                         await interaction.editReply({
                             content: '<:emoji_79:1543457009461100625> **Key Validada com Sucesso!**\n\nVerifique sua **DM (Mensagem privada)**\nPara acessar seu pack no app telegram',
-                            components: [linhaBotao]
+                            components: [linhaBotaoEphemeral]
                         });
 
                     } catch (error) {
