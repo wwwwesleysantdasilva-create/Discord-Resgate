@@ -14,12 +14,13 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO COM O BANCO POSTGRESQL (SUPABASE / RAILWAY)
+// CONEXÃO COM O BANCO POSTGRESQL (COM FORÇAGEM DE IPV4 PARA O RAILWAY)
 const pool = new Pool(
     process.env.DATABASE_URL
         ? {
               connectionString: process.env.DATABASE_URL,
-              ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+              ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
+              family: 4 // Força o uso de IPv4 e evita o erro ENETUNREACH
           }
         : {
               host: process.env.PGHOST,
@@ -27,7 +28,8 @@ const pool = new Pool(
               user: process.env.PGUSER,
               password: process.env.PGPASSWORD,
               database: process.env.PGDATABASE,
-              ssl: { rejectUnauthorized: false }
+              ssl: { rejectUnauthorized: false },
+              family: 4 // Força o uso de IPv4
           }
 );
 
@@ -78,9 +80,6 @@ async function registrarLog(acao, usuario) {
     await pool.query(`INSERT INTO logs (action, "user", timestamp) VALUES ($1, $2, $3)`, [acao, usuario, dataHora]);
 }
 
-// ==========================================
-// FUNÇÃO AJUSTADA APENAS ELA
-// ==========================================
 async function enviarWebhookDiscord(mensagem) {
     if (!DISCORD_WEBHOOK_URL) {
         console.log('⚠️ DISCORD_WEBHOOK_URL não está configurada!');
@@ -98,7 +97,6 @@ async function enviarWebhookDiscord(mensagem) {
         console.error('❌ Erro detalhado ao enviar webhook para o Discord:', error.response ? error.response.data : error.message); 
     }
 }
-// ==========================================
 
 // ROTA WEBHOOK TELEGRAM
 app.post('/telegram-webhook', async (req, res) => {
