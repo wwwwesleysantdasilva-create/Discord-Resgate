@@ -119,27 +119,24 @@ app.post('/telegram-webhook', async (req, res) => {
             // Usuário ENTROU no grupo do Telegram
             if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
                 
-                // Primeiro verificamos se esse ID do Telegram já está atrelado a algum rastro recente
                 db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, registroExistente) => {
                     
                     if (registroExistente) {
-                        // Já estava vinculado, apenas atualiza o status de entrada
                         db.run(`UPDATE rastro_eterno SET data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`, [dataHoraAtual, registroExistente.id]);
 
                         enviarWebhookDiscord(
                             `## LOGS  DE RESGATE\n\n` +
                             `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
-                            `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA:** \`${registroExistente.key_usada}\`\n\n` +
-                            `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                            `> **DC USER:** <@${registroExistente.discord_id}>\n` +
-                            `> **DC ID:** \`${registroExistente.discord_id}\`\n` +
+                            `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA: ** \`${registroExistente.key_usada}\`\n\n` +
+                            `<:info:1543491941314863239> **| INFORMAÇÕES **\n\n` +
+                            `> **DC USER: ** <@${registroExistente.discord_id}>\n` +
+                            `> **DC ID: ** \`${registroExistente.discord_id}\`\n` +
                             `> **TG USER:** ${telegramUsername}\n` +
                             `> **TG ID:** \`${telegramId}\`\n\n` +
                             `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                            `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
+                            `<:relogio_StorM:1531049138291216414> **| HORA: ** \`${horaBr}\``
                         );
                     } else {
-                        // Se não tem telegram_id ainda, pega o último registro que gerou link e ainda não vinculou o telegram
                         db.get(`SELECT * FROM rastro_eterno WHERE telegram_id IS NULL ORDER BY id DESC LIMIT 1`, [], (err2, ultimoGerado) => {
                             if (ultimoGerado) {
                                 db.run(`UPDATE rastro_eterno SET telegram_id = ?, telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`,
@@ -149,17 +146,16 @@ app.post('/telegram-webhook', async (req, res) => {
                                 enviarWebhookDiscord(
                                     `## LOGS  DE RESGATE\n\n` +
                                     `<:theboxez:1543426459165532292> **| PRODUTO:** ${ultimoGerado.produto}\n` +
-                                    `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA:** \`${ultimoGerado.key_usada}\`\n\n` +
-                                    `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                                    `> **DC USER:** <@${ultimoGerado.discord_id}>\n` +
-                                    `> **DC ID:** \`${ultimoGerado.discord_id}\`\n` +
+                                    `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA: ** \`${ultimoGerado.key_usada}\`\n\n` +
+                                    `<:info:1543491941314863239> **| INFORMAÇÕES **\n\n` +
+                                    `> **DC USER: ** <@${ultimoGerado.discord_id}>\n` +
+                                    `> **DC ID: ** \`${ultimoGerado.discord_id}\`\n` +
                                     `> **TG USER:** ${telegramUsername}\n` +
                                     `> **TG ID:** \`${telegramId}\`\n\n` +
                                     `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                                    `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
+                                    `<:relogio_StorM:1531049138291216414> **| HORA: ** \`${horaBr}\``
                                 );
                             } else {
-                                // Caso alguém entre sem key gerada pelo bot
                                 enviarWebhookDiscord(
                                     `📥 **[LOG TELEGRAM - ENTRADA SUSPEITA / SEM REGISTRO]**\n\n` +
                                     `📱 **Telegram:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
@@ -180,13 +176,13 @@ app.post('/telegram-webhook', async (req, res) => {
                         enviarWebhookDiscord(
                             `## LOG DE SAIDA\n\n` +
                             `<:theboxez:1543426459165532292> **| SAIDA DE:** ${row.produto}\n` +
-                            `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                            `> **DC USER:** <@${row.discord_id}>\n` +
-                            `> **DC ID:** \`${row.discord_id}\`\n` +
+                            `<:info:1543491941314863239> **| INFORMAÇÕES **\n\n` +
+                            `> **DC USER: ** <@${row.discord_id}>\n` +
+                            `> **DC ID: ** \`${row.discord_id}\`\n` +
                             `> **TG USER:** ${telegramUsername}\n` +
                             `> **TG ID:** \`${telegramId}\`\n\n` +
                             `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                            `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
+                            `<:relogio_StorM:1531049138291216414> **| HORA: ** \`${horaBr}\``
                         );
                     } else {
                         enviarWebhookDiscord(
