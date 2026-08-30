@@ -1,45 +1,48 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
-const { createClient } = require('@libsql/client');
+const sqlite3 = require('sqlite3').verbose();
 const axios = require('axios');
+const fs = require('fs');
 
-// Configuração segura do Banco de Dados Turso (Cloud SQLite)
-const db = createClient({
-    url: process.env.TURSO_DATABASE_URL || "libsql://dummy-url",
-    authToken: process.env.TURSO_AUTH_TOKEN || "dummy-token",
-});
-
-// Inicialização e criação das tabelas no Turso
-async function inicializarBanco() {
-    try {
-        await db.execute(`CREATE TABLE IF NOT EXISTS keys (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key TEXT UNIQUE,
-            product TEXT,
-            group_id TEXT,
-            used INTEGER DEFAULT 0,
-            created_at TEXT
-        )`);
-
-        await db.execute(`CREATE TABLE IF NOT EXISTS products (
-            id TEXT UNIQUE,
-            name TEXT,
-            group_id TEXT
-        )`);
-
-        await db.execute(`CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            action TEXT,
-            user TEXT,
-            timestamp TEXT
-        )`);
-        console.log('✅ Conectado e tabelas verificadas no Turso com sucesso!');
-    } catch (err) {
-        console.error('Erro ao inicializar o banco de dados no Turso:', err.message);
-    }
+// Garante que a pasta /data existe (caso esteja usando o Volume do Railway)
+if (!fs.existsSync('./data')) {
+    try { fs.mkdirSync('./data'); } catch (e) {}
 }
 
-inicializarBanco();
+// Configuração do SQLite Local (Usa a pasta do volume no Railway ou localmente)
+const dbPath = fs.existsSync('/data') ? '/data/database.sqlite' : './database.sqlite';
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+        console.error('Erro ao conectar ao SQLite:', err.message);
+    } else {
+        console.log('✅ Conectado ao banco SQLite local com sucesso!');
+    }
+});
+
+// Inicialização e criação das tabelas
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT UNIQUE,
+        product TEXT,
+        group_id TEXT,
+        used INTEGER DEFAULT 0,
+        created_at TEXT
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS products (
+        id TEXT UNIQUE,
+        name TEXT,
+        group_id TEXT
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action TEXT,
+        user TEXT,
+        timestamp TEXT
+    )`);
+});
 
 const client = new Client({
     intents: [
@@ -51,16 +54,11 @@ const client = new Client({
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
-async function registrarLog(acao, usuario) {
+function registrarLog(acao, usuario) {
     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    try {
-        await db.execute({
-            sql: `INSERT INTO logs (action, user, timestamp) VALUES (?, ?, ?)`,
-            args: [acao, usuario, dataHora]
-        });
-    } catch (err) {
-        console.error('Erro ao registrar log:', err.message);
-    }
+    db.run(`INSERT INTO logs (action, user, timestamp) VALUES (?, ?, ?)`, [acao, usuario, dataHora], (err) => {
+        if (err) console.error('Erro ao registrar log:', err.message);
+    });
 }
 
 client.once('clientReady', async () => {
@@ -193,19 +191,17 @@ client.on('interactionCreate', async interaction => {
             await interaction.showModal(modal);
 
         } else if (id === 'btn_registros') {
-            try {
-                const rs = await db.execute(`SELECT * FROM logs ORDER BY id DESC LIMIT 10`);
-                const rows = rs.rows;
-
+            db.all(`SELECT * FROM logs ORDER BY id DESC LIMIT 10`, [], async (err, rows) => {
+                if (err) {
+                    return interaction.reply({ content: '❌ Erro ao buscar registros.', flags: MessageFlags.Ephemeral });
+                }
                 if (!rows.length) {
                     return interaction.reply({ content: '📜 Nenhum registro encontrado até o momento.', flags: MessageFlags.Ephemeral });
                 }
 
                 const listaLogs = rows.map(r => `• **[${r.timestamp}]** ${r.user}: ${r.action}`).join('\n');
                 await interaction.reply({ content: `📜 **Últimos Registros da Loja:**\n\n${listaLogs}`, flags: MessageFlags.Ephemeral });
-            } catch (err) {
-                await interaction.reply({ content: '❌ Erro ao buscar registros.', flags: MessageFlags.Ephemeral });
-            }
+            });
         }
     } 
     else if (interaction.isModalSubmit()) {
@@ -217,66 +213,56 @@ client.on('interactionCreate', async interaction => {
             
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-            try {
-                const rsKey = await db.execute({
-                    sql: `SELECT * FROM keys WHERE key = ?`,
-                    args: [keyDigitada]
-                });
-                const row = rsKey.rows[0];
-
-                if (!row || row.used === 1) {
+            db.get(`SELECT * FROM keys WHERE key = ?`, [keyDigitada], async (err, row) => {
+                if (err || !row || row.used === 1) {
                     return interaction.editReply('❌ **Key inválida ou já utilizada.** Verifique se copiou corretamente.');
                 }
 
-                const rsProd = await db.execute({
-                    sql: `SELECT name FROM products WHERE id = ?`,
-                    args: [row.product]
+                db.get(`SELECT name FROM products WHERE id = ?`, [row.product], async (errProd, produto) => {
+                    const nomeProduto = produto ? produto.name : row.product;
+
+                    try {
+                        const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
+                            chat_id: row.group_id,
+                            member_limit: 1,
+                            expire_date: Math.floor(Date.now() / 1000) + (60 * 15)
+                        });
+
+                        const linkExclusivo = respostaTelegram.data.result.invite_link;
+
+                        db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
+
+                        try {
+                            await interaction.user.send(
+                                `✅ **Acesso Liberado com Sucesso!**\n\n` +
+                                `📦 **Produto:** ${nomeProduto}\n` +
+                                `🔑 **Key utilizada:** \`${keyDigitada}\`\n\n` +
+                                `Aqui está o seu link exclusivo para entrar no grupo do Telegram:\n` +
+                                `⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n` +
+                                `🔗 ${linkExclusivo}`
+                            );
+                        } catch (dmError) {
+                            return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
+                        }
+
+                        const botaoIrParaDM = new ButtonBuilder()
+                            .setLabel('Abrir DM do Bot')
+                            .setStyle(ButtonStyle.Link)
+                            .setURL(`https://discord.com/users/${client.user.id}`);
+
+                        const linhaBotao = new ActionRowBuilder().addComponents(botaoIrParaDM);
+
+                        await interaction.editReply({
+                            content: '<:emoji_79:1543457009461100625> **Key Validada com Sucesso!**\n\nVerifique sua **DM (Mensagem privada)**\nPara acessar seu pack no app telegram',
+                            components: [linhaBotao]
+                        });
+
+                    } catch (error) {
+                        console.error('Erro ao processar resgate:', error.response ? error.response.data : error.message);
+                        await interaction.editReply('❌ Falha ao processar a key ou comunicar com o Telegram. Verifique se o ID do grupo está correto e se o bot é administrador lá.');
+                    }
                 });
-                const produto = rsProd.rows[0];
-                const nomeProduto = produto ? produto.name : row.product;
-
-                const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
-                    chat_id: row.group_id,
-                    member_limit: 1,
-                    expire_date: Math.floor(Date.now() / 1000) + (60 * 15)
-                });
-
-                const linkExclusivo = respostaTelegram.data.result.invite_link;
-
-                await db.execute({
-                    sql: `UPDATE keys SET used = 1 WHERE key = ?`,
-                    args: [keyDigitada]
-                });
-
-                try {
-                    await interaction.user.send(
-                        `✅ **Acesso Liberado com Sucesso!**\n\n` +
-                        `📦 **Produto:** ${nomeProduto}\n` +
-                        `🔑 **Key utilizada:** \`${keyDigitada}\`\n\n` +
-                        `Aqui está o seu link exclusivo para entrar no grupo do Telegram:\n` +
-                        `⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n` +
-                        `🔗 ${linkExclusivo}`
-                    );
-                } catch (dmError) {
-                    return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
-                }
-
-                const botaoIrParaDM = new ButtonBuilder()
-                    .setLabel('Abrir DM do Bot')
-                    .setStyle(ButtonStyle.Link)
-                    .setURL(`https://discord.com/users/${client.user.id}`);
-
-                const linhaBotao = new ActionRowBuilder().addComponents(botaoIrParaDM);
-
-                await interaction.editReply({
-                    content: '<:emoji_79:1543457009461100625> **Key Validada com Sucesso!**\n\nVerifique sua **DM (Mensagem privada)**\nPara acessar seu pack no app telegram',
-                    components: [linhaBotao]
-                });
-
-            } catch (error) {
-                console.error('Erro ao processar resgate:', error.response ? error.response.data : error.message);
-                await interaction.editReply('❌ Falha ao processar a key ou comunicar com o Telegram. Verifique se o ID do grupo está correto e se o bot é administrador lá.');
-            }
+            });
         }
 
         if (modalId === 'modal_add_produto') {
@@ -284,33 +270,27 @@ client.on('interactionCreate', async interaction => {
             const prodName = interaction.fields.getTextInputValue('prod_name').trim();
             const groupID = interaction.fields.getTextInputValue('prod_group').trim();
 
-            try {
-                await db.execute({
-                    sql: `INSERT OR REPLACE INTO products (id, name, group_id) VALUES (?, ?, ?)`,
-                    args: [prodId, prodName, groupID]
-                });
-
+            db.run(`INSERT OR REPLACE INTO products (id, name, group_id) VALUES (?, ?, ?)`, [prodId, prodName, groupID], (err) => {
+                if (err) {
+                    return interaction.reply({ content: '❌ Erro ao salvar produto no banco de dados.', flags: MessageFlags.Ephemeral });
+                }
                 registrarLog(`Adicionou/Atualizou o produto: ${prodName} (${prodId})`, usuario);
                 interaction.reply({ content: `✅ Produto **${prodName}** (\`${prodId}\`) cadastrado com sucesso para o grupo \`${groupID}\`!`, flags: MessageFlags.Ephemeral });
-            } catch (err) {
-                interaction.reply({ content: '❌ Erro ao salvar produto no banco de dados.', flags: MessageFlags.Ephemeral });
-            }
+            });
 
         } else if (modalId === 'modal_del_produto') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
 
-            try {
-                const rsCheck = await db.execute({ sql: `SELECT * FROM products WHERE id = ?`, args: [prodId] });
-                if (!rsCheck.rows.length) {
+            db.get(`SELECT * FROM products WHERE id = ?`, [prodId], (err, produto) => {
+                if (!produto) {
                     return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não foi encontrado.`, flags: MessageFlags.Ephemeral });
                 }
 
-                await db.execute({ sql: `DELETE FROM products WHERE id = ?`, args: [prodId] });
-                registrarLog(`Removeu o produto ID: ${prodId}`, usuario);
-                interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido com sucesso!`, flags: MessageFlags.Ephemeral });
-            } catch (err) {
-                interaction.reply({ content: '❌ Erro ao remover o produto.', flags: MessageFlags.Ephemeral });
-            }
+                db.run(`DELETE FROM products WHERE id = ?`, [prodId], () => {
+                    registrarLog(`Removeu o produto ID: ${prodId}`, usuario);
+                    interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido com sucesso!`, flags: MessageFlags.Ephemeral });
+                });
+            });
 
         } else if (modalId === 'modal_gerar_keys') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
@@ -320,38 +300,32 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '❌ A quantidade deve ser um número entre 1 e 100.', flags: MessageFlags.Ephemeral });
             }
 
-            try {
-                const rsProd = await db.execute({ sql: `SELECT * FROM products WHERE id = ?`, args: [prodId] });
-                const produto = rsProd.rows[0];
-
+            db.get(`SELECT * FROM products WHERE id = ?`, [prodId], (err, produto) => {
                 if (!produto) {
-                    return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não encontrado! Cadastre-o primeiro usando "Add produto".`, flags: MessageFlags.Ephemeral });
+                    return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não encontrado! Cadastre-o primeiro.`, flags: MessageFlags.Ephemeral });
                 }
 
                 const keysGeradas = [];
                 const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-                for (let i = 0; i < qtd; i++) {
-                    const randomString = Math.random().toString(36).substring(2, 10).toUpperCase();
-                    const keyFinal = `${prodId}-${randomString}`;
-                    
-                    await db.execute({
-                        sql: `INSERT INTO keys (key, product, group_id, used, created_at) VALUES (?, ?, ?, 0, ?)`,
-                        args: [keyFinal, prodId, produto.group_id, dataHora]
-                    });
-                    keysGeradas.push(`\`${keyFinal}\``);
-                }
+                db.serialize(() => {
+                    const stmt = db.prepare(`INSERT INTO keys (key, product, group_id, used, created_at) VALUES (?, ?, ?, 0, ?)`);
+                    for (let i = 0; i < qtd; i++) {
+                        const randomString = Math.random().toString(36).substring(2, 10).toUpperCase();
+                        const keyFinal = `${prodId}-${randomString}`;
+                        stmt.run(keyFinal, prodId, produto.group_id, dataHora);
+                        keysGeradas.push(`\`${keyFinal}\``);
+                    }
+                    stmt.finalize();
+                });
 
                 registrarLog(`Gerou ${qtd} key(s) para o produto: ${produto.name}`, usuario);
 
-                await interaction.reply({ 
+                interaction.reply({ 
                     content: `✅ **${qtd} Key(s) gerada(s) para [${produto.name}]!**\n\n${keysGeradas.join('\n')}`, 
                     flags: MessageFlags.Ephemeral 
                 });
-            } catch (err) {
-                console.error(err);
-                interaction.reply({ content: '❌ Erro ao gerar as keys.', flags: MessageFlags.Ephemeral });
-            }
+            });
         }
     }
 });
