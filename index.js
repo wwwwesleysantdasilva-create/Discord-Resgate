@@ -232,8 +232,9 @@ client.on('interactionCreate', async interaction => {
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
 
+                        let mensagemDMUrl = '';
                         try {
-                            await interaction.user.send(
+                            const msgDM = await interaction.user.send(
                                 `✅ **Acesso Liberado com Sucesso!**\n\n` +
                                 `📦 **Produto:** ${nomeProduto}\n` +
                                 `🔑 **Key utilizada:** \`${keyDigitada}\`\n\n` +
@@ -241,6 +242,7 @@ client.on('interactionCreate', async interaction => {
                                 `⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n` +
                                 `🔗 ${linkExclusivo}`
                             );
+                            mensagemDMUrl = msgDM.url; // Link direto da mensagem enviada na DM
                         } catch (dmError) {
                             return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
                         }
@@ -248,7 +250,7 @@ client.on('interactionCreate', async interaction => {
                         const botaoIrParaDM = new ButtonBuilder()
                             .setLabel('Abrir DM do Bot')
                             .setStyle(ButtonStyle.Link)
-                            .setURL(`https://discord.com/users/${client.user.id}`);
+                            .setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`);
 
                         const linhaBotao = new ActionRowBuilder().addComponents(botaoIrParaDM);
 
