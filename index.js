@@ -39,7 +39,8 @@ const client = new Client({
     ]
 });
 
-client.once('ready', async () => {
+// Atualizado para clientReady para remover o aviso de depreciação
+client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
 
     // Registro do comando slash /painel
@@ -127,5 +128,4 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Autenticação correta usando a variável de ambiente do Railway (.env)
 client.login(process.env.DISCORD_TOKEN);
