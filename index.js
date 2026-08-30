@@ -14,70 +14,65 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO COM O BANCO POSTGRESQL (COM FORÇAGEM DE IPV4 PARA O RAILWAY)
-const pool = new Pool(
-    process.env.DATABASE_URL
-        ? {
-              connectionString: process.env.DATABASE_URL,
-              ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
-              family: 4 // Força o uso de IPv4 e evita o erro ENETUNREACH
-          }
-        : {
-              host: process.env.PGHOST,
-              port: process.env.PGPORT ? parseInt(process.env.PGPORT) : 5432,
-              user: process.env.PGUSER,
-              password: process.env.PGPASSWORD,
-              database: process.env.PGDATABASE,
-              ssl: { rejectUnauthorized: false },
-              family: 4 // Força o uso de IPv4
-          }
-);
+// CONEXÃO COM O SUPABASE (POSTGRESQL) COM CONFIGURAÇÃO DE REDE ROBUSTA
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+});
 
 async function inicializarBanco() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS keys (
-            id SERIAL PRIMARY KEY,
-            key TEXT UNIQUE,
-            product TEXT,
-            group_id TEXT,
-            used INTEGER DEFAULT 0,
-            created_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS products (
-            id TEXT UNIQUE PRIMARY KEY,
-            name TEXT,
-            group_id TEXT
-        );
-        CREATE TABLE IF NOT EXISTS logs (
-            id SERIAL PRIMARY KEY,
-            action TEXT,
-            "user" TEXT,
-            timestamp TEXT
-        );
-        CREATE TABLE IF NOT EXISTS rastro_eterno (
-            id SERIAL PRIMARY KEY,
-            discord_id TEXT,
-            discord_tag TEXT,
-            telegram_id TEXT,
-            telegram_user TEXT,
-            produto TEXT,
-            group_id TEXT,
-            key_usada TEXT,
-            data_resgate TEXT,
-            data_entrada_telegram TEXT,
-            data_saida_telegram TEXT,
-            status_atual TEXT
-        );
-    `);
-    console.log('✅ Tabelas no PostgreSQL prontas!');
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS keys (
+                id SERIAL PRIMARY KEY,
+                key TEXT UNIQUE,
+                product TEXT,
+                group_id TEXT,
+                used INTEGER DEFAULT 0,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS products (
+                id TEXT UNIQUE PRIMARY KEY,
+                name TEXT,
+                group_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS logs (
+                id SERIAL PRIMARY KEY,
+                action TEXT,
+                "user" TEXT,
+                timestamp TEXT
+            );
+            CREATE TABLE IF NOT EXISTS rastro_eterno (
+                id SERIAL PRIMARY KEY,
+                discord_id TEXT,
+                discord_tag TEXT,
+                telegram_id TEXT,
+                telegram_user TEXT,
+                produto TEXT,
+                group_id TEXT,
+                key_usada TEXT,
+                data_resgate TEXT,
+                data_entrada_telegram TEXT,
+                data_saida_telegram TEXT,
+                status_atual TEXT
+            );
+        `);
+        console.log('✅ Tabelas no Supabase prontas!');
+    } catch (dbError) {
+        console.error('❌ Erro ao conectar/inicializar o banco no Supabase:', dbError.message);
+    }
 }
-inicializarBanco().catch(console.error);
+inicializarBanco();
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 async function registrarLog(acao, usuario) {
-    const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    await pool.query(`INSERT INTO logs (action, "user", timestamp) VALUES ($1, $2, $3)`, [acao, usuario, dataHora]);
+    try {
+        const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        await pool.query(`INSERT INTO logs (action, "user", timestamp) VALUES ($1, $2, $3)`, [acao, usuario, dataHora]);
+    } catch (e) {
+        console.error('Erro ao registrar log:', e.message);
+    }
 }
 
 async function enviarWebhookDiscord(mensagem) {
@@ -349,3 +344,4 @@ app.listen(PORT, () => {
     console.log(`🚀 Servidor na porta ${PORT}`);
     client.login(process.env.DISCORD_TOKEN);
 });
+
