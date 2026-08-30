@@ -1,4 +1,11 @@
 require('dotenv').config();
+const dns = require('dns');
+
+// Força o Node.js a priorizar IPv4 globalmente, resolvendo o erro ENETUNREACH do Supabase no Railway
+if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+}
+
 const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { Pool } = require('pg');
 const axios = require('axios');
@@ -14,7 +21,7 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO COM O SUPABASE (POSTGRESQL) COM CONFIGURAÇÃO DE REDE ROBUSTA
+// CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
@@ -344,4 +351,3 @@ app.listen(PORT, () => {
     console.log(`🚀 Servidor na porta ${PORT}`);
     client.login(process.env.DISCORD_TOKEN);
 });
-
