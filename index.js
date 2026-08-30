@@ -3,13 +3,26 @@ const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionR
 const sqlite3 = require('sqlite3').verbose();
 const axios = require('axios');
 const fs = require('fs');
+const express = require('express');
+
+// Configuração do Servidor Express para escutar o Telegram Webhook no Railway
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+
+app.get('/', (req, res) => {
+    res.send('🤖 Bot e Sistema de Logs do Telegram estão online!');
+});
 
 // Garante que a pasta /data existe (caso esteja usando o Volume do Railway)
 if (!fs.existsSync('./data')) {
     try { fs.mkdirSync('./data'); } catch (e) {}
 }
 
-// Configuração do SQLite Local (Usa a pasta do volume no Railway ou localmente)
+// Configuração do SQLite Local
 const dbPath = fs.existsSync('/data') ? '/data/database.sqlite' : './database.sqlite';
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
@@ -42,6 +55,20 @@ db.serialize(() => {
         user TEXT,
         timestamp TEXT
     )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS rastro_eterno (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        discord_id TEXT,
+        discord_tag TEXT,
+        telegram_id TEXT,
+        telegram_user TEXT,
+        produto TEXT,
+        key_usada TEXT,
+        data_resgate TEXT,
+        data_entrada_telegram TEXT,
+        data_saida_telegram TEXT,
+        status_atual TEXT
+    )`);
 });
 
 const client = new Client({
@@ -52,14 +79,73 @@ const client = new Client({
     ]
 });
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-
 function registrarLog(acao, usuario) {
     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     db.run(`INSERT INTO logs (action, user, timestamp) VALUES (?, ?, ?)`, [acao, usuario, dataHora], (err) => {
         if (err) console.error('Erro ao registrar log:', err.message);
     });
 }
+
+// Função para disparar Webhook para o canal do Discord
+async function enviarWebhookDiscord(mensagem) {
+    if (!DISCORD_WEBHOOK_URL) return;
+    try {
+        await axios.post(DISCORD_WEBHOOK_URL, { content: mensagem });
+    } catch (error) {
+        console.error('Erro ao enviar webhook para o Discord:', error.message);
+    }
+}
+
+// Rota que o Telegram vai chamar quando houver eventos de entrada/saída no grupo (chat_member)
+app.post('/telegram-webhook', async (req, res) => {
+    try {
+        const update = req.body;
+        
+        // Verifica se o evento é de alteração de membro no chat
+        if (update.chat_member) {
+            const chatMember = update.chat_member;
+            const user = chatMember.new_chat_member.user;
+            const telegramId = user.id.toString();
+            const telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
+            const newStatus = chatMember.new_chat_member.status;
+            const oldStatus = chatMember.old_chat_member.status;
+            const dataHoraAtual = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+            // Usuário ENTROU no grupo (member, creator, administrator vindo de left, kicked)
+            if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
+                
+                db.run(`UPDATE rastro_eterno SET telegram_id = ?, telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE telegram_id = ? OR telegram_id IS NULL ORDER BY id DESC LIMIT 1`,
+                    [telegramId, telegramUsername, dataHoraAtual, telegramId]
+                );
+
+                await enviarWebhookDiscord(
+                    `📥 **[LOG TELEGRAM - ENTRADA]**\n\n` +
+                    `👤 **Membro:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                    `⏰ **Horário de Entrada:** \`${dataHoraAtual}\`\n` +
+                    `🟢 **Status:** Entrou no grupo do Telegram com sucesso!`
+                );
+            } 
+            // Usuário SAIU ou foi removido do grupo
+            else if (['left', 'kicked'].includes(newStatus) && ['member', 'administrator', 'creator'].includes(oldStatus)) {
+                
+                db.run(`UPDATE rastro_eterno SET data_saida_telegram = ?, status_atual = 'Saiu do Grupo' WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`,
+                    [dataHoraAtual, telegramId]
+                );
+
+                await enviarWebhookDiscord(
+                    `📤 **[LOG TELEGRAM - SAÍDA]**\n\n` +
+                    `👤 **Membro:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                    `⏰ **Horário de Saída:** \`${dataHoraAtual}\`\n` +
+                    `🔴 **Status:** Deixou o grupo do Telegram.`
+                );
+            }
+        }
+        res.status(200).send('OK');
+    } catch (err) {
+        console.error('Erro no webhook do telegram:', err.message);
+        res.status(500).send('Error');
+    }
+});
 
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
@@ -207,6 +293,7 @@ client.on('interactionCreate', async interaction => {
     else if (interaction.isModalSubmit()) {
         const modalId = interaction.customId;
         const usuario = interaction.user.tag;
+        const userId = interaction.user.id;
 
         if (modalId === 'modal_resgate') {
             const keyDigitada = interaction.fields.getTextInputValue('input_key').trim();
@@ -229,10 +316,28 @@ client.on('interactionCreate', async interaction => {
                         });
 
                         const linkExclusivo = respostaTelegram.data.result.invite_link;
+                        const dataHoraResgate = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
 
-                        // DM com os seus emojis originais restaurados
+                        // Salva no banco de dados para o rastro eterno
+                        db.run(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, key_usada, data_resgate, status_atual) VALUES (?, ?, ?, ?, ?, ?)`,
+                            [userId, usuario, nomeProduto, keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
+                        );
+
+                        registrarLog(`Resgatou a key ${keyDigitada} (${nomeProduto})`, usuario);
+
+                        // Envia Log detalhado via Webhook para o Discord
+                        await enviarWebhookDiscord(
+                            `🔑 **[LOG RASTRO ETERNO - KEY APROVADA]**\n\n` +
+                            `👤 **Discord:** ${usuario} (\`ID: ${userId}\`)\n` +
+                            `📦 **Produto:** ${nomeProduto}\n` +
+                            `🔑 **Key:** \`${keyDigitada}\`\n` +
+                            `⏰ **Horário Aprovação:** \`${dataHoraResgate}\`\n` +
+                            `🔗 **Link de Convite gerado para Telegram**`
+                        );
+
+                        // Envio da DM com o container V2
                         const containerDM = new ContainerBuilder()
                             .addTextDisplayComponents(
                                 new TextDisplayBuilder().setContent(
@@ -262,7 +367,6 @@ client.on('interactionCreate', async interaction => {
                             return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
                         }
 
-                        // Botão Ephemeral ajustado para "Ver dm"
                         const botaoVerDm = new ButtonBuilder()
                             .setLabel('Ver dm')
                             .setStyle(ButtonStyle.Link)
@@ -348,4 +452,8 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// Inicia o Servidor HTTP e o Bot do Discord juntos
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor Webhook rodando na porta ${PORT}`);
+    client.login(process.env.DISCORD_TOKEN);
+});
