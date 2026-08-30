@@ -110,7 +110,11 @@ app.post('/telegram-webhook', async (req, res) => {
             const telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
             const newStatus = chatMemberEvent.new_chat_member.status;
             const oldStatus = chatMemberEvent.old_chat_member.status;
-            const dataHoraAtual = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            
+            const agora = new Date();
+            const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
             // Usuário ENTROU no grupo do Telegram
             if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
@@ -123,14 +127,16 @@ app.post('/telegram-webhook', async (req, res) => {
                         db.run(`UPDATE rastro_eterno SET data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`, [dataHoraAtual, registroExistente.id]);
 
                         enviarWebhookDiscord(
-                            `📥 **[LOG TELEGRAM - ENTRADA VINCULADA]**\n\n` +
-                            `🎯 **Cruzamento de Dados via Key:**\n` +
-                            `👤 **Discord:** <@${registroExistente.discord_id}> (${registroExistente.discord_tag})\n` +
-                            `🔑 **Key Utilizada:** \`${registroExistente.key_usada}\`\n` +
-                            `📦 **Produto:** ${registroExistente.produto}\n` +
-                            `📱 **Telegram que entrou:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                            `⏰ **Horário:** \`${dataHoraAtual}\`\n\n` +
-                            `✨ *Confirmação:* Essa é a pessoa exata do Discord que resgatou a key!`
+                            `## LOGS  DE RESGATE\n\n` +
+                            `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
+                            `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA:** \`${registroExistente.key_usada}\`\n\n` +
+                            `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                            `> **DC USER:** <@${registroExistente.discord_id}>\n` +
+                            `> **DC ID:** \`${registroExistente.discord_id}\`\n` +
+                            `> **TG USER:** ${telegramUsername}\n` +
+                            `> **TG ID:** \`${telegramId}\`\n\n` +
+                            `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
+                            `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
                         );
                     } else {
                         // Se não tem telegram_id ainda, pega o último registro que gerou link e ainda não vinculou o telegram
@@ -141,14 +147,16 @@ app.post('/telegram-webhook', async (req, res) => {
                                 );
 
                                 enviarWebhookDiscord(
-                                    `📥 **[LOG TELEGRAM - PRIMEIRA ENTRADA (CRUZADA)]**\n\n` +
-                                    `🔍 **Dados Cruzados com Sucesso!**\n` +
-                                    `👤 **Discord Responsável:** <@${ultimoGerado.discord_id}> (${ultimoGerado.discord_tag})\n` +
-                                    `🔑 **Key Usada:** \`${ultimoGerado.key_usada}\`\n` +
-                                    `📦 **Produto:** ${ultimoGerado.produto}\n` +
-                                    `📱 **Telegram Identificado:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                                    `⏰ **Horário:** \`${dataHoraAtual}\`\n\n` +
-                                    `🎯 **Pegou no pulo:** "Essa aqui é você!" Vinculação feita com sucesso!`
+                                    `## LOGS  DE RESGATE\n\n` +
+                                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${ultimoGerado.produto}\n` +
+                                    `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA:** \`${ultimoGerado.key_usada}\`\n\n` +
+                                    `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                                    `> **DC USER:** <@${ultimoGerado.discord_id}>\n` +
+                                    `> **DC ID:** \`${ultimoGerado.discord_id}\`\n` +
+                                    `> **TG USER:** ${telegramUsername}\n` +
+                                    `> **TG ID:** \`${telegramId}\`\n\n` +
+                                    `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
+                                    `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
                                 );
                             } else {
                                 // Caso alguém entre sem key gerada pelo bot
@@ -170,12 +178,15 @@ app.post('/telegram-webhook', async (req, res) => {
 
                     if (row) {
                         enviarWebhookDiscord(
-                            `📤 **[LOG TELEGRAM - SAÍDA CRUZADA]**\n\n` +
-                            `👤 **Discord Vinculado:** <@${row.discord_id}> (${row.discord_tag})\n` +
-                            `🔑 **Key Original:** \`${row.key_usada}\`\n` +
-                            `📦 **Produto:** ${row.produto}\n` +
-                            `📱 **Telegram que saiu:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                            `⏰ **Horário de Saída:** \`${dataHoraAtual}\``
+                            `## LOG DE SAIDA\n\n` +
+                            `<:theboxez:1543426459165532292> **| SAIDA DE:** ${row.produto}\n` +
+                            `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                            `> **DC USER:** <@${row.discord_id}>\n` +
+                            `> **DC ID:** \`${row.discord_id}\`\n` +
+                            `> **TG USER:** ${telegramUsername}\n` +
+                            `> **TG ID:** \`${telegramId}\`\n\n` +
+                            `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
+                            `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
                         );
                     } else {
                         enviarWebhookDiscord(
