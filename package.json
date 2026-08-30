@@ -1,20 +1,16 @@
 {
   "name": "discord-resgate-bot",
   "version": "1.0.0",
-  "description": "Bot de resgate de keys e integracao com Telegram",
+  "description": "Bot de resgate integrado com Supabase e Telegram",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
-    "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "pg": "^8.11.3",
-    "sqlite3": "^5.1.7"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "axios": "^1.7.9",
+    "discord.js": "^14.17.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
   }
 }
