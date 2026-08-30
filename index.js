@@ -14,11 +14,22 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO COM POSTGRESQL (DATABASE_URL)
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false }
-});
+// CONEXÃO ADAPTATIVA COM POSTGRESQL
+const pool = new Pool(
+    process.env.DATABASE_URL
+        ? {
+              connectionString: process.env.DATABASE_URL,
+              ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+          }
+        : {
+              host: process.env.PGHOST,
+              port: process.env.PGPORT ? parseInt(process.env.PGPORT) : 5432,
+              user: process.env.PGUSER,
+              password: process.env.PGPASSWORD,
+              database: process.env.PGDATABASE,
+              ssl: { rejectUnauthorized: false }
+          }
+);
 
 async function inicializarBanco() {
     await pool.query(`
