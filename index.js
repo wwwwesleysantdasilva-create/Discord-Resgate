@@ -1,4 +1,4 @@
-require('dotenv').config();
+Require('dotenv').config();
 const dns = require('dns');
 
 // Força o Node.js a priorizar IPv4 globalmente, resolvendo o erro ENETUNREACH do Supabase no Railway
@@ -101,49 +101,70 @@ async function enviarWebhookDiscord(payload) {
 }
 
 // ---------------------------------------------------------
-// BLOCO CIRÚRGICO 2: ROTA TELEGRAM BLINDADA E COM RAIO-X
+// ROTA TELEGRAM BLINDADA E COM CORREÇÃO DE IDS E EVENTOS
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
         console.log("📥 [RAIO-X] Recebido do Telegram:", JSON.stringify(update, null, 2));
 
-        let telegramId, telegramUsername, chatId, entrouNoGrupo, saiuDoGrupo;
+        let telegramId, telegramUsername, chatId, entrouNoGrupo = false, saiuDoGrupo = false;
 
-        // Tenta capturar pelo formato 1 (Supergrupos)
+        // 1. Formato chat_member (Supergrupos / Mudanças de status de membro)
         if (update.chat_member) {
-            const user = update.chat_member.new_chat_member.user;
-            if (user.is_bot) return res.status(200).send('OK');
+            const user = update.chat_member.new_chat_member?.user || update.chat_member.from;
+            if (user && user.is_bot) return res.status(200).send('OK');
 
-            telegramId = user.id.toString();
-            telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
-            chatId = update.chat_member.chat.id.toString();
+            if (user) {
+                telegramId = user.id.toString();
+                telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
+            }
+            chatId = update.chat_member.chat?.id ? update.chat_member.chat.id.toString() : null;
             
-            const newStatus = update.chat_member.new_chat_member.status;
-            entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus);
+            const newStatus = update.chat_member.new_chat_member?.status;
+            const oldStatus = update.chat_member.old_chat_member?.status;
+
+            entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus);
+            // Se entrou direto sem histórico anterior claro:
+            if (!entrouNoGrupo && ['member', 'administrator', 'creator'].includes(newStatus)) {
+                entrouNoGrupo = true;
+            }
             saiuDoGrupo = ['left', 'kicked'].includes(newStatus);
         } 
-        // Tenta capturar pelo formato 2 (Grupos Normais)
-        else if (update.message && update.message.new_chat_members) {
+        // 2. Formato message.new_chat_members (Entrada em grupos comuns)
+        else if (update.message && update.message.new_chat_members && update.message.new_chat_members.length > 0) {
             const user = update.message.new_chat_members[0];
             if (user.is_bot) return res.status(200).send('OK');
 
             telegramId = user.id.toString();
             telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
-            chatId = update.message.chat.id.toString();
+            chatId = update.message.chat?.id ? update.message.chat.id.toString() : null;
             entrouNoGrupo = true;
             saiuDoGrupo = false;
         }
+        // 3. Formato message.left_chat_member (Saída em grupos comuns)
         else if (update.message && update.message.left_chat_member) {
             const user = update.message.left_chat_member;
             if (user.is_bot) return res.status(200).send('OK');
 
             telegramId = user.id.toString();
             telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
-            chatId = update.message.chat.id.toString();
+            chatId = update.message.chat?.id ? update.message.chat.id.toString() : null;
             entrouNoGrupo = false;
             saiuDoGrupo = true;
+        } 
+        // 4. Formato my_chat_member (O próprio bot ou alteração de status geral)
+        else if (update.my_chat_member) {
+            const chat = update.my_chat_member.chat;
+            chatId = chat?.id ? chat.id.toString() : null;
+            console.log(`🤖 Evento my_chat_member recebido para o chat ID: ${chatId}`);
+            return res.status(200).send('OK');
         } else {
+            return res.status(200).send('OK');
+        }
+
+        if (!telegramId || !chatId) {
+            console.log("⚠️ Webhook ignorado: telegramId ou chatId não identificados.");
             return res.status(200).send('OK');
         }
 
@@ -158,7 +179,7 @@ app.post('/telegram-webhook', async (req, res) => {
             const resExistente = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
             
             if (resExistente.rows.length > 0) {
-                console.log("🔄 O usuário já tinha log antes. Permitindo envio duplicado para testes.");
+                console.log("🔄 O usuário já tinha log antes. Atualizando e permitindo reenvio.");
                 const registroExistente = resExistente.rows[0];
                 await pool.query(`UPDATE rastro_eterno SET telegram_user = $1, data_entrada_telegram = $2, status_atual = 'No Grupo' WHERE id = $3`, [telegramUsername, dataHoraAtual, registroExistente.id]);
                 
@@ -176,8 +197,13 @@ app.post('/telegram-webhook', async (req, res) => {
                 const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
                 enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
             } else {
-                console.log(`🔍 Buscando rastro PENDENTE onde o group_id seja EXATAMENTE = ${chatId}`);
-                const resUltimo = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND group_id = $1 ORDER BY id DESC LIMIT 1`, [chatId]);
+                console.log(`🔍 Buscando rastro PENDENTE flexível para o group_id: ${chatId}`);
+                
+                // Busca flexível (ignora eventuais diferenças de sinal de menos ou formatação de string no group_id)
+                const resUltimo = await pool.query(
+                    `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND (group_id = $1 OR group_id = $2) ORDER BY id DESC LIMIT 1`, 
+                    [chatId, chatId.startsWith('-') ? chatId.substring(1) : `-${chatId}`]
+                );
                 
                 if (resUltimo.rows.length > 0) {
                     console.log("✅ Rastro pendente encontrado! Vinculando a conta do Telegram e enviando Webhook.");
@@ -198,7 +224,7 @@ app.post('/telegram-webhook', async (req, res) => {
                     const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
                     enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
                 } else {
-                    console.log(`⚠️ ALERTA: Ninguém esperando para entrar no grupo ${chatId} ou o ID do Telegram inserido no produto está diferente desse número! (Se faltar o sinal de menos '-', ajuste no banco).`);
+                    console.log(`⚠️ ALERTA: Nenhum rastro pendente encontrado no banco para o group_id ${chatId}. Verifique se o ID cadastrado no produto confere exatamente com o ID do grupo.`);
                 }
             }
         } 
@@ -225,7 +251,7 @@ app.post('/telegram-webhook', async (req, res) => {
         }
         res.status(200).send('OK');
     } catch (err) { 
-        console.error('❌ Erro na rota telegram-webhook:', err.message);
+        console.error('❌ Erro crítico na rota telegram-webhook:', err.message);
         res.status(500).send('Error'); 
     }
 });
@@ -237,7 +263,6 @@ client.once('clientReady', async () => {
         const domain = RAILWAY_PUBLIC_DOMAIN.startsWith('http') ? RAILWAY_PUBLIC_DOMAIN : `https://${RAILWAY_PUBLIC_DOMAIN}`;
         const webhookUrl = `${domain}/telegram-webhook`;
         try {
-            // ADICIONADO "message" NOS ALLOWED_UPDATES PARA GRUPOS NORMAIS ENVIAREM LOGS
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
                 url: webhookUrl,
                 allowed_updates: ["message", "chat_member", "my_chat_member"]
@@ -316,7 +341,7 @@ client.on('interactionCreate', async interaction => {
             const resKey = await pool.query(`SELECT * FROM keys WHERE key = $1`, [keyDigitada]);
             const row = resKey.rows[0];
 
-            if (!row || row.used === 1) return interaction.editReply('<:cloner_warning:1543647603059859506>  **Key inválida ou já utilizada.**');
+            if (!row || row.used === 1) return interaction.editReply('<:cloner_warning:15434706... animate> **Key inválida ou já utilizada.**');
 
             const resProd = await pool.query(`SELECT name FROM products WHERE id = $1`, [row.product]);
             const produto = resProd.rows[0];
