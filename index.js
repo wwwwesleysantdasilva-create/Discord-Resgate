@@ -1,4 +1,5 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+require('dotenv').config();
+const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
 // Configuração do Banco de Dados SQLite
@@ -53,9 +54,10 @@ client.once('ready', async () => {
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'painel') {
-            const embed = new EmbedBuilder()
-                .setDescription('### <:mundo_StorM:1530945775679307786> | Dashboard \n\n——————')
-                .setColor('#2b2d31');
+            const container = new ContainerBuilder()
+                .addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('### <:mundo_StorM:1530945775679307786> | Dashboard \n\n——————')
+                );
 
             // Linha 1 de Botões (Cinza / Secondary)
             const row1 = new ActionRowBuilder().addComponents(
@@ -63,12 +65,12 @@ client.on('interactionCreate', async interaction => {
                     .setCustomId('btn_gerar_keys')
                     .setLabel('Gerar keys')
                     .setStyle(ButtonStyle.Secondary)
-                    .setEmoji('<:edit:1543439616328204408>'),
+                    .setEmoji('1543439616328204408'),
                 new ButtonBuilder()
                     .setCustomId('btn_registros')
                     .setLabel('Registros')
                     .setStyle(ButtonStyle.Secondary)
-                    .setEmoji('<:34563:1543438969641898124>')
+                    .setEmoji('1543438969641898124')
             );
 
             // Linha 2 de Botões (Cinza / Secondary)
@@ -77,15 +79,18 @@ client.on('interactionCreate', async interaction => {
                     .setCustomId('btn_add_produto')
                     .setLabel('Add produto')
                     .setStyle(ButtonStyle.Secondary)
-                    .setEmoji('<:mais:1532944991423565844>'),
+                    .setEmoji('1532944991423565844'),
                 new ButtonBuilder()
                     .setCustomId('btn_remover_produto')
                     .setLabel('Remover produto')
                     .setStyle(ButtonStyle.Secondary)
-                    .setEmoji('<:menos:1543438189136715857>')
+                    .setEmoji('1543438189136715857')
             );
 
-            await interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
+            await interaction.reply({ 
+                components: [container, row1, row2], 
+                flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral 
+            });
         }
     } else if (interaction.isButton()) {
         if (interaction.customId === 'btn_add_produto') {
@@ -122,5 +127,5 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Substitua pelo token do seu bot
-client.login('SEU_TOKEN_AQUI');
+// Autenticação correta usando a variável de ambiente do Railway (.env)
+client.login(process.env.DISCORD_TOKEN);
