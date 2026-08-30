@@ -43,24 +43,23 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 client.on('messageCreate', async (message) => {
     if (message.content === '!painel' && message.member.permissions.has('Administrator')) {
         
-        // Criando o layout estruturado com Components V2 (Container + TextDisplay)
+        // Criando o layout com Components V2 sem a cor lateral (borda)
         const container = new ContainerBuilder()
             .addTextDisplayComponents(
-                new TextDisplayBuilder().setContent('## <:theboxez:1543426459165532292> Resgatar Pack
-Clique no botão abaixo para validar sua key e obter acesso ao seu pack instantaneamente.')
+                new TextDisplayBuilder().setContent('## <:theboxez:1543426459165532292> Resgatar Pack\n\nClique no botão abaixo para validar sua key e obter acesso ao seu pack \ninstantaneamente.')
             );
 
         const botao = new ButtonBuilder()
             .setCustomId('btn_resgate')
-            .setLabel('Resgatar Key')
-            .setEmoji('🔑')
+            .setLabel(' Resgatar')
+            .setEmoji('1543426459165532292')
             .setStyle(ButtonStyle.Success);
 
         const linha = new ActionRowBuilder().addComponents(botao);
 
         await message.channel.send({
             components: [container, linha],
-            flags: MessageFlags.IsComponentsV2 // Flag obrigatória para habilitar o layout V2
+            flags: MessageFlags.IsComponentsV2
         });
         
         await message.delete();
