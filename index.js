@@ -45,9 +45,9 @@ client.on('messageCreate', async (message) => {
         
         // Criando o layout estruturado com Components V2 (Container + TextDisplay)
         const container = new ContainerBuilder()
-            .setAccentColor(0x2B2D31) // Cor lateral do container
             .addTextDisplayComponents(
-                new TextDisplayBuilder().setContent('### 📦 Resgatar Acesso\nClique no botão abaixo para validar sua Key e receber instantaneamente o link exclusivo do grupo.')
+                new TextDisplayBuilder().setContent('## <:theboxez:1543426459165532292> Resgatar Pack
+Clique no botão abaixo para validar sua key e obter acesso ao seu pack instantaneamente.')
             );
 
         const botao = new ButtonBuilder()
