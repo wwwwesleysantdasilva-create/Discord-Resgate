@@ -14,7 +14,7 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO ADAPTATIVA COM POSTGRESQL
+// CONEXÃO ADAPTATIVA COM POSTGRESQL (DIFERENCIA LOCAL E RAILWAY AUTOMATICAMENTE)
 const pool = new Pool(
     process.env.DATABASE_URL
         ? {
