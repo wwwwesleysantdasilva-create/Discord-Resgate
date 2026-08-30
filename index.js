@@ -11,6 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
@@ -27,7 +28,7 @@ db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE, product TEXT, group_id TEXT, used INTEGER DEFAULT 0, created_at TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS products (id TEXT UNIQUE, name TEXT, group_id TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT, user TEXT, timestamp TEXT)`);
-    db.run(`CREATE TABLE IF NOT EXISTS rastro_eterno (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT, discord_tag TEXT, telegram_id TEXT, telegram_user TEXT, produto TEXT, key_usada TEXT, data_resgate TEXT, data_entrada_telegram TEXT, data_saida_telegram TEXT, status_atual TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS rastro_eterno (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_id TEXT, discord_tag TEXT, telegram_id TEXT, telegram_user TEXT, produto TEXT, group_id TEXT, key_usada TEXT, data_resgate TEXT, data_entrada_telegram TEXT, data_saida_telegram TEXT, status_atual TEXT)`);
 });
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
@@ -62,6 +63,7 @@ app.post('/telegram-webhook', async (req, res) => {
 
             const telegramId = user.id.toString();
             const telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
+            const chatId = chatMemberEvent.chat.id.toString();
             const newStatus = chatMemberEvent.new_chat_member.status;
             const oldStatus = chatMemberEvent.old_chat_member.status;
             
@@ -88,7 +90,7 @@ app.post('/telegram-webhook', async (req, res) => {
                             `<:relogio_StorM:1531049138291216414> **| HORA: ** \`${horaBr}\``
                         );
                     } else {
-                        db.get(`SELECT * FROM rastro_eterno WHERE telegram_id IS NULL ORDER BY id DESC LIMIT 1`, [], (err2, ultimoGerado) => {
+                        db.get(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND group_id = ? ORDER BY id DESC LIMIT 1`, [chatId], (err2, ultimoGerado) => {
                             if (ultimoGerado) {
                                 db.run(`UPDATE rastro_eterno SET telegram_id = ?, telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`, [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]);
                                 enviarWebhookDiscord(
@@ -137,6 +139,22 @@ app.post('/telegram-webhook', async (req, res) => {
 
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
+    
+    // Configura automaticamente o Webhook no Telegram usando a URL do Railway
+    if (TELEGRAM_TOKEN && RAILWAY_PUBLIC_DOMAIN) {
+        const domain = RAILWAY_PUBLIC_DOMAIN.startsWith('http') ? RAILWAY_PUBLIC_DOMAIN : `https://${RAILWAY_PUBLIC_DOMAIN}`;
+        const webhookUrl = `${domain}/telegram-webhook`;
+        try {
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
+                url: webhookUrl,
+                allowed_updates: ["chat_member", "my_chat_member"]
+            });
+            console.log(`✅ Webhook Telegram atrelado com sucesso a: ${webhookUrl}`);
+        } catch (webhookErr) {
+            console.error('❌ Erro ao registrar Webhook no Telegram:', webhookErr.message);
+        }
+    }
+
     const commands = [
         new SlashCommandBuilder().setName('painel').setDescription('Painel adm').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('setarpainel').setDescription('Painel clientes').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -204,7 +222,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             db.get(`SELECT * FROM keys WHERE key = ?`, [keyDigitada], async (err, row) => {
-                if (err || !row || row.used === 1) return interaction.editReply('❌ **Key inválida ou já utilizada.**');
+                if (err || !row || row.used === 1) return interaction.editReply('<:cloner_warning:1543647603059859506>  **Key inválida ou já utilizada.**');
 
                 db.get(`SELECT name FROM products WHERE id = ?`, [row.product], async (errProd, produto) => {
                     const nomeProduto = produto ? produto.name : row.product;
@@ -218,8 +236,8 @@ client.on('interactionCreate', async interaction => {
                         const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
-                        db.run(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, key_usada, data_resgate, status_atual) VALUES (?, ?, ?, ?, ?, ?)`,
-                            [userId, usuario, nomeProduto, keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
+                        db.run(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                            [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
                         );
 
                         const containerDM = new ContainerBuilder().addTextDisplayComponents(
