@@ -39,8 +39,15 @@ function registrarLog(acao, usuario) {
 
 async function enviarWebhookDiscord(mensagem) {
     if (!DISCORD_WEBHOOK_URL) return;
-    try { await axios.post(DISCORD_WEBHOOK_URL, { content: mensagem }); } 
-    catch (error) { console.error('Erro ao enviar webhook:', error.message); }
+    try { 
+        await axios.post(DISCORD_WEBHOOK_URL, { 
+            content: mensagem 
+        }, {
+            headers: { 'Content-Type': 'application/json' }
+        }); 
+    } catch (error) { 
+        console.error('Erro ao enviar webhook para o Discord:', error.response ? error.response.data : error.message); 
+    }
 }
 
 // ROTA WEBHOOK TELEGRAM
@@ -63,7 +70,7 @@ app.post('/telegram-webhook', async (req, res) => {
             const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-            // ENTRADA (SÓ DISPARA A LOG COMPLETA APÓS A ENTRADA CONFIRMADA)
+            // ENTRADA CONFIRMADA NO TELEGRAM
             if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
                 db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, registroExistente) => {
                     if (registroExistente) {
@@ -101,7 +108,7 @@ app.post('/telegram-webhook', async (req, res) => {
                     }
                 });
             } 
-            // SAÍDA (CORRIGIDO PARA BUSCAR REGISTRO ATIVO)
+            // SAÍDA DO GRUPO NO TELEGRAM
             else if (['left', 'kicked'].includes(newStatus) && ['member', 'administrator', 'creator'].includes(oldStatus)) {
                 db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, row) => {
                     if (row) {
@@ -122,7 +129,10 @@ app.post('/telegram-webhook', async (req, res) => {
             }
         }
         res.status(200).send('OK');
-    } catch (err) { res.status(500).send('Error'); }
+    } catch (err) { 
+        console.error('Erro na rota telegram-webhook:', err.message);
+        res.status(500).send('Error'); 
+    }
 });
 
 client.once('clientReady', async () => {
