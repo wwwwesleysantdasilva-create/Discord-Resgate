@@ -232,15 +232,15 @@ client.on('interactionCreate', async interaction => {
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
 
-                        // Envio do card limpo na DM
+                        // DM com os seus emojis originais restaurados
                         const containerDM = new ContainerBuilder()
                             .addTextDisplayComponents(
                                 new TextDisplayBuilder().setContent(
-                                    `✅ **Acesso Liberado com Sucesso!**\n\n` +
-                                    `📦 **| Produto:** ${nomeProduto}\n` +
-                                    `🔑 **| Key utilizada:** \`${keyDigitada}\`\n\n` +
+                                    `<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n` +
+                                    `<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n` +
+                                    `<:emoji_49:1543470661744201868> **| Key utilizada:** \`${keyDigitada}\`\n\n` +
                                     `Aqui está o seu link exclusivo para entrar no grupo do Telegram:\n\n` +
-                                    `⚠️ **Este link serve apenas para 1 pessoa e expira em 15 minutos.**`
+                                    `<:warn:1539069654922952774> **Este link serve apenas para 1 pessoa e expira em 15 minutos.**`
                                 )
                             );
 
@@ -262,7 +262,7 @@ client.on('interactionCreate', async interaction => {
                             return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
                         }
 
-                        // Botão Ephemeral ajustado para "Ver dm" direcionando para a mensagem privada
+                        // Botão Ephemeral ajustado para "Ver dm"
                         const botaoVerDm = new ButtonBuilder()
                             .setLabel('Ver dm')
                             .setStyle(ButtonStyle.Link)
