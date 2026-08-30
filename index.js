@@ -204,23 +204,18 @@ client.on('interactionCreate', async interaction => {
                 }
 
                 try {
-                    // Pega o nome do produto correspondente para deixar a mensagem da DM mais bonita
                     db.get(`SELECT name FROM products WHERE id = ?`, [row.product], async (errProd, produto) => {
                         const nomeProduto = produto ? produto.name : row.product;
 
-                        // Comunicação com a API do Telegram para gerar link de convite
                         const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
                             chat_id: row.group_id,
                             member_limit: 1,
-                            expire_date: Math.floor(Date.now() / 1000) + (60 * 15) // Expira em 15 minutos
+                            expire_date: Math.floor(Date.now() / 1000) + (60 * 15)
                         });
 
                         const linkExclusivo = respostaTelegram.data.result.invite_link;
-
-                        // Marca a key como usada no banco
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
 
-                        // Envia a mensagem definitiva na DM do cliente
                         try {
                             await interaction.user.send(
                                 `✅ **Acesso Liberado com Sucesso!**\n\n` +
@@ -231,12 +226,22 @@ client.on('interactionCreate', async interaction => {
                                 `🔗 ${linkExclusivo}`
                             );
                         } catch (dmError) {
-                            // Caso o cliente esteja com a DM fechada, o bot avisa na efêmera para ele abrir
-                            return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs (mensagens privadas) estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
+                            return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
                         }
 
-                        // Resposta efêmera de redirecionamento na tela do canal
-                        await interaction.editReply('✅ **Key validada com sucesso!** Verifique sua **DM (Mensagem Privada)** para pegar o seu link exclusivo do Telegram.');
+                        // Criação do botão de redirecionamento para a DM do bot
+                        const botaoIrParaDM = new ButtonBuilder()
+                            .setLabel('Abrir DM do Bot')
+                            .setStyle(ButtonStyle.Link)
+                            .setURL(`https://discord.com/users/${client.user.id}`);
+
+                        const linhaBotao = new ActionRowBuilder().addComponents(botaoIrParaDM);
+
+                        // Resposta efêmera com o texto exato e o botão configurado
+                        await interaction.editReply({
+                            content: '<:emoji_79:1543457009461100625> **Key Validada com Sucesso!**\n\nVerifique sua **DM (Mensagem privada)**\nPara acessar seu pack no app telegram',
+                            components: [linhaBotao]
+                        });
                     });
 
                 } catch (error) {
