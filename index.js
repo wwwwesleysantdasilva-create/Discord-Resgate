@@ -14,7 +14,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
 app.get('/', (req, res) => {
-    res.send('🤖 Bot e Sistema de Logs do Telegram estão online!');
+    res.send('🤖 Bot e Sistema de Logs do Telegram com Cruzamento de Dados estão online!');
 });
 
 // Garante que a pasta /data existe (caso esteja usando o Volume do Railway)
@@ -100,13 +100,10 @@ async function enviarWebhookDiscord(mensagem) {
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
-        
-        // Verifica se o evento é de alteração de membro no chat (chat_member ou my_chat_member)
         const chatMemberEvent = update.chat_member || update.my_chat_member;
 
         if (chatMemberEvent) {
             const user = chatMemberEvent.new_chat_member.user;
-            // Ignora se o evento for do próprio bot
             if (user.is_bot) return res.status(200).send('OK');
 
             const telegramId = user.id.toString();
@@ -115,33 +112,80 @@ app.post('/telegram-webhook', async (req, res) => {
             const oldStatus = chatMemberEvent.old_chat_member.status;
             const dataHoraAtual = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-            // Usuário ENTROU no grupo
+            // Usuário ENTROU no grupo do Telegram
             if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
                 
-                db.run(`UPDATE rastro_eterno SET telegram_id = ?, telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE telegram_id = ? OR telegram_id IS NULL ORDER BY id DESC LIMIT 1`,
-                    [telegramId, telegramUsername, dataHoraAtual, telegramId]
-                );
+                // Primeiro verificamos se esse ID do Telegram já está atrelado a algum rastro recente
+                db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, registroExistente) => {
+                    
+                    if (registroExistente) {
+                        // Já estava vinculado, apenas atualiza o status de entrada
+                        db.run(`UPDATE rastro_eterno SET data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`, [dataHoraAtual, registroExistente.id]);
 
-                await enviarWebhookDiscord(
-                    `📥 **[LOG TELEGRAM - ENTRADA]**\n\n` +
-                    `👤 **Membro:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                    `⏰ **Horário de Entrada:** \`${dataHoraAtual}\`\n` +
-                    `🟢 **Status:** Entrou no grupo do Telegram com sucesso!`
-                );
+                        enviarWebhookDiscord(
+                            `📥 **[LOG TELEGRAM - ENTRADA VINCULADA]**\n\n` +
+                            `🎯 **Cruzamento de Dados via Key:**\n` +
+                            `👤 **Discord:** <@${registroExistente.discord_id}> (${registroExistente.discord_tag})\n` +
+                            `🔑 **Key Utilizada:** \`${registroExistente.key_usada}\`\n` +
+                            `📦 **Produto:** ${registroExistente.produto}\n` +
+                            `📱 **Telegram que entrou:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                            `⏰ **Horário:** \`${dataHoraAtual}\`\n\n` +
+                            `✨ *Confirmação:* Essa é a pessoa exata do Discord que resgatou a key!`
+                        );
+                    } else {
+                        // Se não tem telegram_id ainda, pega o último registro que gerou link e ainda não vinculou o telegram
+                        db.get(`SELECT * FROM rastro_eterno WHERE telegram_id IS NULL ORDER BY id DESC LIMIT 1`, [], (err2, ultimoGerado) => {
+                            if (ultimoGerado) {
+                                db.run(`UPDATE rastro_eterno SET telegram_id = ?, telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`,
+                                    [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]
+                                );
+
+                                enviarWebhookDiscord(
+                                    `📥 **[LOG TELEGRAM - PRIMEIRA ENTRADA (CRUZADA)]**\n\n` +
+                                    `🔍 **Dados Cruzados com Sucesso!**\n` +
+                                    `👤 **Discord Responsável:** <@${ultimoGerado.discord_id}> (${ultimoGerado.discord_tag})\n` +
+                                    `🔑 **Key Usada:** \`${ultimoGerado.key_usada}\`\n` +
+                                    `📦 **Produto:** ${ultimoGerado.produto}\n` +
+                                    `📱 **Telegram Identificado:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                                    `⏰ **Horário:** \`${dataHoraAtual}\`\n\n` +
+                                    `🎯 **Pegou no pulo:** "Essa aqui é você!" Vinculação feita com sucesso!`
+                                );
+                            } else {
+                                // Caso alguém entre sem key gerada pelo bot
+                                enviarWebhookDiscord(
+                                    `📥 **[LOG TELEGRAM - ENTRADA SUSPEITA / SEM REGISTRO]**\n\n` +
+                                    `📱 **Telegram:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                                    `⚠️ **Aviso:** Entrou no grupo, mas nenhuma key foi encontrada recentemente no sistema para vincular a ele.`
+                                );
+                            }
+                        });
+                    }
+                });
             } 
-            // Usuário SAIU ou foi removido do grupo
+            // Usuário SAIU do grupo do Telegram
             else if (['left', 'kicked'].includes(newStatus) && ['member', 'administrator', 'creator'].includes(oldStatus)) {
                 
-                db.run(`UPDATE rastro_eterno SET data_saida_telegram = ?, status_atual = 'Saiu do Grupo' WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`,
-                    [dataHoraAtual, telegramId]
-                );
+                db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, row) => {
+                    db.run(`UPDATE rastro_eterno SET data_saida_telegram = ?, status_atual = 'Saiu do Grupo' WHERE telegram_id = ?`, [dataHoraAtual, telegramId]);
 
-                await enviarWebhookDiscord(
-                    `📤 **[LOG TELEGRAM - SAÍDA]**\n\n` +
-                    `👤 **Membro:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                    `⏰ **Horário de Saída:** \`${dataHoraAtual}\`\n` +
-                    `🔴 **Status:** Deixou o grupo do Telegram.`
-                );
+                    if (row) {
+                        enviarWebhookDiscord(
+                            `📤 **[LOG TELEGRAM - SAÍDA CRUZADA]**\n\n` +
+                            `👤 **Discord Vinculado:** <@${row.discord_id}> (${row.discord_tag})\n` +
+                            `🔑 **Key Original:** \`${row.key_usada}\`\n` +
+                            `📦 **Produto:** ${row.produto}\n` +
+                            `📱 **Telegram que saiu:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                            `⏰ **Horário de Saída:** \`${dataHoraAtual}\``
+                        );
+                    } else {
+                        enviarWebhookDiscord(
+                            `📤 **[LOG TELEGRAM - SAÍDA]**\n\n` +
+                            `👤 **Membro:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
+                            `⏰ **Horário de Saída:** \`${dataHoraAtual}\`\n` +
+                            `🔴 **Status:** Deixou o grupo do Telegram.`
+                        );
+                    }
+                });
             }
         }
         res.status(200).send('OK');
@@ -313,7 +357,6 @@ client.on('interactionCreate', async interaction => {
                     const nomeProduto = produto ? produto.name : row.product;
 
                     try {
-                        // Garante a criação de um link com limite estrito de 1 uso e validade de 15 minutos
                         const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
                             chat_id: row.group_id,
                             member_limit: 1,
@@ -325,24 +368,23 @@ client.on('interactionCreate', async interaction => {
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
 
-                        // Salva no banco de dados para o rastro eterno
+                        // Salva no banco de dados vinculando o Discord e a Key
                         db.run(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, key_usada, data_resgate, status_atual) VALUES (?, ?, ?, ?, ?, ?)`,
                             [userId, usuario, nomeProduto, keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
                         );
 
                         registrarLog(`Resgatou a key ${keyDigitada} (${nomeProduto})`, usuario);
 
-                        // Envia Log detalhado via Webhook para o Discord
+                        // Envia Log de Resgate inicial
                         await enviarWebhookDiscord(
                             `🔑 **[LOG RASTRO ETERNO - KEY APROVADA]**\n\n` +
-                            `👤 **Discord:** ${usuario} (\`ID: ${userId}\`)\n` +
+                            `👤 **Discord:** <@${userId}> (${usuario}) (\`ID: ${userId}\`)\n` +
                             `📦 **Produto:** ${nomeProduto}\n` +
                             `🔑 **Key:** \`${keyDigitada}\`\n` +
-                            `⏰ **Horário Aprovação:** \`${dataHoraResgate}\`\n` +
+                            `⏰ **Horário:** \`${dataHoraResgate}\`\n` +
                             `🔗 **Link de Convite exclusivo (1 uso / 15 min) gerado**`
                         );
 
-                        // Envio da DM com o container V2 e emojis restaurados
                         const containerDM = new ContainerBuilder()
                             .addTextDisplayComponents(
                                 new TextDisplayBuilder().setContent(
