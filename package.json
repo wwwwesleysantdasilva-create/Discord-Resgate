@@ -1,15 +1,14 @@
 {
-  "name": "bot-loja-telegram",
-  "version": "1.0.2",
-  "description": "Bot do Discord para gerenciar e vender packs do Telegram via keys",
+  "name": "discord-resgate",
+  "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.9",
-    "discord.js": "^14.17.3",
-    "dotenv": "^16.4.7",
+    "axios": "^1.x.x",
+    "discord.js": "^14.x.x",
+    "express": "^4.19.2",
     "sqlite3": "^5.1.7"
   }
 }
