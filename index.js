@@ -84,9 +84,6 @@ async function registrarLog(acao, usuario) {
     }
 }
 
-// ---------------------------------------------------------
-// BLOCO CIRÚRGICO 1: WEBHOOK DISCORD ADAPTADO PARA V2 (JSON)
-// ---------------------------------------------------------
 async function enviarWebhookDiscord(payload) {
     if (!DISCORD_WEBHOOK_URL) {
         console.log('⚠️ DISCORD_WEBHOOK_URL não está configurada!');
@@ -104,118 +101,134 @@ async function enviarWebhookDiscord(payload) {
 }
 
 // ---------------------------------------------------------
-// BLOCO CIRÚRGICO 2: ROTA TELEGRAM PERMITINDO DUPLICATAS
+// BLOCO CIRÚRGICO 2: ROTA TELEGRAM BLINDADA E COM RAIO-X
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
-        const chatMemberEvent = update.chat_member;
+        console.log("📥 [RAIO-X] Recebido do Telegram:", JSON.stringify(update, null, 2));
 
-        if (chatMemberEvent) {
-            const user = chatMemberEvent.new_chat_member.user;
+        let telegramId, telegramUsername, chatId, entrouNoGrupo, saiuDoGrupo;
+
+        // Tenta capturar pelo formato 1 (Supergrupos)
+        if (update.chat_member) {
+            const user = update.chat_member.new_chat_member.user;
             if (user.is_bot) return res.status(200).send('OK');
 
-            const telegramId = user.id.toString();
-            const telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
-            const chatId = chatMemberEvent.chat.id.toString();
+            telegramId = user.id.toString();
+            telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
+            chatId = update.chat_member.chat.id.toString();
             
-            const newStatus = chatMemberEvent.new_chat_member.status;
+            const newStatus = update.chat_member.new_chat_member.status;
+            entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus);
+            saiuDoGrupo = ['left', 'kicked'].includes(newStatus);
+        } 
+        // Tenta capturar pelo formato 2 (Grupos Normais)
+        else if (update.message && update.message.new_chat_members) {
+            const user = update.message.new_chat_members[0];
+            if (user.is_bot) return res.status(200).send('OK');
+
+            telegramId = user.id.toString();
+            telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
+            chatId = update.message.chat.id.toString();
+            entrouNoGrupo = true;
+            saiuDoGrupo = false;
+        }
+        else if (update.message && update.message.left_chat_member) {
+            const user = update.message.left_chat_member;
+            if (user.is_bot) return res.status(200).send('OK');
+
+            telegramId = user.id.toString();
+            telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
+            chatId = update.message.chat.id.toString();
+            entrouNoGrupo = false;
+            saiuDoGrupo = true;
+        } else {
+            return res.status(200).send('OK');
+        }
+
+        console.log(`🔎 Processando - Usuário: ${telegramUsername} | TG ID: ${telegramId} | Ação: ${entrouNoGrupo ? 'Entrou' : saiuDoGrupo ? 'Saiu' : 'Nenhuma'} | Grupo ID recebido: ${chatId}`);
+
+        const agora = new Date();
+        const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+        if (entrouNoGrupo) {
+            const resExistente = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
             
-            const agora = new Date();
-            const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-            const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-            const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-            // Permite duplicatas: checa apenas o status atual
-            const entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus);
-            const saiuDoGrupo = ['left', 'kicked'].includes(newStatus);
-
-            if (entrouNoGrupo) {
-                const resExistente = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
+            if (resExistente.rows.length > 0) {
+                console.log("🔄 O usuário já tinha log antes. Permitindo envio duplicado para testes.");
+                const registroExistente = resExistente.rows[0];
+                await pool.query(`UPDATE rastro_eterno SET telegram_user = $1, data_entrada_telegram = $2, status_atual = 'No Grupo' WHERE id = $3`, [telegramUsername, dataHoraAtual, registroExistente.id]);
                 
-                if (resExistente.rows.length > 0) {
-                    const registroExistente = resExistente.rows[0];
-                    await pool.query(`UPDATE rastro_eterno SET telegram_user = $1, data_entrada_telegram = $2, status_atual = 'No Grupo' WHERE id = $3`, [telegramUsername, dataHoraAtual, registroExistente.id]);
+                const conteudoLog = `## LOG DE RESGATE\n\n` +
+                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
+                    `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${registroExistente.key_usada}\`\n\n` +
+                    `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                    `> **DC USER:** <@${registroExistente.discord_id}>\n` +
+                    `> **DC ID:** \`${registroExistente.discord_id}\`\n` +
+                    `> **TG USER:** ${telegramUsername}\n` +
+                    `> **TG ID:** \`${telegramId}\`\n\n` +
+                    `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
+                    `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``;
+
+                const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
+                enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
+            } else {
+                console.log(`🔍 Buscando rastro PENDENTE onde o group_id seja EXATAMENTE = ${chatId}`);
+                const resUltimo = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND group_id = $1 ORDER BY id DESC LIMIT 1`, [chatId]);
+                
+                if (resUltimo.rows.length > 0) {
+                    console.log("✅ Rastro pendente encontrado! Vinculando a conta do Telegram e enviando Webhook.");
+                    const ultimoGerado = resUltimo.rows[0];
+                    await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]);
                     
                     const conteudoLog = `## LOG DE RESGATE\n\n` +
-                        `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
-                        `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${registroExistente.key_usada}\`\n\n` +
+                        `<:theboxez:1543426459165532292> **| PRODUTO:** ${ultimoGerado.produto}\n` +
+                        `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${ultimoGerado.key_usada}\`\n\n` +
                         `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                        `> **DC USER:** <@${registroExistente.discord_id}>\n` +
-                        `> **DC ID:** \`${registroExistente.discord_id}\`\n` +
+                        `> **DC USER:** <@${ultimoGerado.discord_id}>\n` +
+                        `> **DC ID:** \`${ultimoGerado.discord_id}\`\n` +
                         `> **TG USER:** ${telegramUsername}\n` +
                         `> **TG ID:** \`${telegramId}\`\n\n` +
                         `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
                         `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``;
 
                     const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
-                    
-                    enviarWebhookDiscord({
-                        components: [container.toJSON()],
-                        flags: MessageFlags.IsComponentsV2
-                    });
+                    enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
                 } else {
-                    const resUltimo = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND group_id = $1 ORDER BY id DESC LIMIT 1`, [chatId]);
-                    if (resUltimo.rows.length > 0) {
-                        const ultimoGerado = resUltimo.rows[0];
-                        await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]);
-                        
-                        const conteudoLog = `## LOG DE RESGATE\n\n` +
-                            `<:theboxez:1543426459165532292> **| PRODUTO:** ${ultimoGerado.produto}\n` +
-                            `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${ultimoGerado.key_usada}\`\n\n` +
-                            `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                            `> **DC USER:** <@${ultimoGerado.discord_id}>\n` +
-                            `> **DC ID:** \`${ultimoGerado.discord_id}\`\n` +
-                            `> **TG USER:** ${telegramUsername}\n` +
-                            `> **TG ID:** \`${telegramId}\`\n\n` +
-                            `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                            `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``;
-
-                        const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
-
-                        enviarWebhookDiscord({
-                            components: [container.toJSON()],
-                            flags: MessageFlags.IsComponentsV2
-                        });
-                    }
+                    console.log(`⚠️ ALERTA: Ninguém esperando para entrar no grupo ${chatId} ou o ID do Telegram inserido no produto está diferente desse número! (Se faltar o sinal de menos '-', ajuste no banco).`);
                 }
-            } 
-            else if (saiuDoGrupo) {
-                const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
-                if (resSaida.rows.length > 0) {
-                    const row = resSaida.rows[0];
-                    await pool.query(`UPDATE rastro_eterno SET data_saida_telegram = $1, status_atual = 'Saiu do Grupo' WHERE id = $2`, [dataHoraAtual, row.id]);
-                    
-                    const conteudoLog = `## LOG DE SAÍDA\n\n` +
-                        `<:theboxez:1543426459165532292> **| PRODUTO:** ${row.produto}\n` +
-                        `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${row.key_usada}\`\n\n` +
-                        `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                        `> **DC USER:** <@${row.discord_id}>\n` +
-                        `> **DC ID:** \`${row.discord_id}\`\n` +
-                        `> **TG USER:** ${telegramUsername}\n` +
-                        `> **TG ID:** \`${telegramId}\`\n\n` +
-                        `<:calendar:1543440066209120387> **| DATA DA SAÍDA:** \`${dataBr}\`\n` +
-                        `<:relogio_StorM:1531049138291216414> **| HORA DA SAÍDA:** \`${horaBr}\``;
+            }
+        } 
+        else if (saiuDoGrupo) {
+            const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
+            if (resSaida.rows.length > 0) {
+                const row = resSaida.rows[0];
+                await pool.query(`UPDATE rastro_eterno SET data_saida_telegram = $1, status_atual = 'Saiu do Grupo' WHERE id = $2`, [dataHoraAtual, row.id]);
+                
+                const conteudoLog = `## LOG DE SAÍDA\n\n` +
+                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${row.produto}\n` +
+                    `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${row.key_usada}\`\n\n` +
+                    `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                    `> **DC USER:** <@${row.discord_id}>\n` +
+                    `> **DC ID:** \`${row.discord_id}\`\n` +
+                    `> **TG USER:** ${telegramUsername}\n` +
+                    `> **TG ID:** \`${telegramId}\`\n\n` +
+                    `<:calendar:1543440066209120387> **| DATA DA SAÍDA:** \`${dataBr}\`\n` +
+                    `<:relogio_StorM:1531049138291216414> **| HORA DA SAÍDA:** \`${horaBr}\``;
 
-                    const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
-
-                    enviarWebhookDiscord({
-                        components: [container.toJSON()],
-                        flags: MessageFlags.IsComponentsV2
-                    });
-                }
+                const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
+                enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
             }
         }
         res.status(200).send('OK');
     } catch (err) { 
-        console.error('Erro na rota telegram-webhook:', err.message);
+        console.error('❌ Erro na rota telegram-webhook:', err.message);
         res.status(500).send('Error'); 
     }
 });
-
-// ---------------------------------------------------------
-// FIM DAS ALTERAÇÕES - O RESTANTE SEGUE INTACTO!
-// ---------------------------------------------------------
 
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
@@ -224,9 +237,10 @@ client.once('clientReady', async () => {
         const domain = RAILWAY_PUBLIC_DOMAIN.startsWith('http') ? RAILWAY_PUBLIC_DOMAIN : `https://${RAILWAY_PUBLIC_DOMAIN}`;
         const webhookUrl = `${domain}/telegram-webhook`;
         try {
+            // ADICIONADO "message" NOS ALLOWED_UPDATES PARA GRUPOS NORMAIS ENVIAREM LOGS
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
                 url: webhookUrl,
-                allowed_updates: ["chat_member", "my_chat_member"]
+                allowed_updates: ["message", "chat_member", "my_chat_member"]
             });
             console.log(`✅ Webhook Telegram atrelado com sucesso a: ${webhookUrl}`);
         } catch (webhookErr) {
