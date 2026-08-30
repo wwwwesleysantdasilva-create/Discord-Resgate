@@ -220,7 +220,7 @@ client.on('interactionCreate', async (interaction) => {
         if (id === 'modal_add_admin') {
             const userId = interaction.fields.getTextInputValue('user_id').trim();
             db.run(`INSERT OR IGNORE INTO admins (user_id) VALUES (?)`, [userId], (err) => {
-                interaction.reply({ content: `✅ Usuário \`${userId}`} adicionado como administrador com sucesso!`, ephemeral: true });
+                interaction.reply({ content: `✅ Usuário \`${userId}\` adicionado como administrador com sucesso!`, ephemeral: true });
             });
         }
 
