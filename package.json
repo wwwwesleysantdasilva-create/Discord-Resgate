@@ -1,6 +1,6 @@
 {
   "name": "bot-loja-telegram",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bot do Discord para gerenciar e vender packs do Telegram via keys",
   "main": "index.js",
   "scripts": {
