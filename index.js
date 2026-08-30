@@ -1,8 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
-const crypto = require('crypto');
-const axios = require('axios'); // Necessário para comunicar com a API do Telegram
+const axios = require('axios');
 
 // Configuração do Banco de Dados SQLite
 const db = new sqlite3.Database('./database.sqlite', (err) => {
@@ -45,7 +44,6 @@ const client = new Client({
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
-// Função auxiliar para registrar logs de auditoria
 function registrarLog(acao, usuario) {
     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     db.run(`INSERT INTO logs (action, user, timestamp) VALUES (?, ?, ?)`, [acao, usuario, dataHora]);
@@ -54,24 +52,29 @@ function registrarLog(acao, usuario) {
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
 
-    // Registro dos comandos slash (/painel e /setarpainel)
-    const painelCommand = new SlashCommandBuilder()
-        .setName('painel')
-        .setDescription('Abre o painel de administração da loja')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+    const commands = [
+        new SlashCommandBuilder()
+            .setName('painel')
+            .setDescription('Abre o painel de administração da loja')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder()
+            .setName('setarpainel')
+            .setDescription('Envia o painel de resgate para os clientes no canal atual')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    ].map(command => command.toJSON());
 
-    const setarPainelCommand = new SlashCommandBuilder()
-        .setName('setarpainel')
-        .setDescription('Envia o painel de resgate para os clientes no canal atual')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
-
-    await client.application.commands.create(painelCommand);
-    await client.application.commands.create(setarPainelCommand);
+    try {
+        for (const guild of client.guilds.cache.values()) {
+            await guild.commands.set(commands);
+        }
+        console.log('✅ Comandos /painel e /setarpainel atualizados!');
+    } catch (error) {
+        console.error('Erro ao registrar comandos:', error);
+    }
 });
 
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
-        // --- COMANDO: /painel (Dashboard Admin) ---
         if (interaction.commandName === 'painel') {
             const container = new ContainerBuilder()
                 .addTextDisplayComponents(
@@ -110,7 +113,6 @@ client.on('interactionCreate', async interaction => {
             });
         }
 
-        // --- COMANDO: /setarpainel (Envia o painel de resgate para os clientes) ---
         if (interaction.commandName === 'setarpainel') {
             const container = new ContainerBuilder()
                 .addTextDisplayComponents(
@@ -133,12 +135,9 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: '✅ Painel de resgate enviado com sucesso neste canal!', ephemeral: true });
         }
     } 
-    
-    // --- CLIQUES DOS BOTÕES ---
     else if (interaction.isButton()) {
         const id = interaction.customId;
 
-        // Botão de Resgate do Cliente (Abre o Modal para digitar a Key)
         if (id === 'btn_resgate_cliente') {
             const modal = new ModalBuilder()
                 .setCustomId('modal_resgate')
@@ -190,13 +189,10 @@ client.on('interactionCreate', async interaction => {
             });
         }
     } 
-    
-    // --- TRATAMENTO DOS MODAIS ---
     else if (interaction.isModalSubmit()) {
         const modalId = interaction.customId;
         const usuario = interaction.user.tag;
 
-        // Submissão do Resgate da Key pelo Cliente
         if (modalId === 'modal_resgate') {
             const keyDigitada = interaction.fields.getTextInputValue('input_key').trim();
             
@@ -208,19 +204,40 @@ client.on('interactionCreate', async interaction => {
                 }
 
                 try {
-                    // Comunicação com a API do Telegram para gerar link de convite único
-                    const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
-                        chat_id: row.group_id,
-                        member_limit: 1,
-                        expire_date: Math.floor(Date.now() / 1000) + (60 * 15) // Expira em 15 minutos
+                    // Pega o nome do produto correspondente para deixar a mensagem da DM mais bonita
+                    db.get(`SELECT name FROM products WHERE id = ?`, [row.product], async (errProd, produto) => {
+                        const nomeProduto = produto ? produto.name : row.product;
+
+                        // Comunicação com a API do Telegram para gerar link de convite
+                        const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
+                            chat_id: row.group_id,
+                            member_limit: 1,
+                            expire_date: Math.floor(Date.now() / 1000) + (60 * 15) // Expira em 15 minutos
+                        });
+
+                        const linkExclusivo = respostaTelegram.data.result.invite_link;
+
+                        // Marca a key como usada no banco
+                        db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
+
+                        // Envia a mensagem definitiva na DM do cliente
+                        try {
+                            await interaction.user.send(
+                                `✅ **Acesso Liberado com Sucesso!**\n\n` +
+                                `📦 **Produto:** ${nomeProduto}\n` +
+                                `🔑 **Key utilizada:** \`${keyDigitada}\`\n\n` +
+                                `Aqui está o seu link exclusivo para entrar no grupo do Telegram:\n` +
+                                `⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n` +
+                                `🔗 ${linkExclusivo}`
+                            );
+                        } catch (dmError) {
+                            // Caso o cliente esteja com a DM fechada, o bot avisa na efêmera para ele abrir
+                            return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs (mensagens privadas) estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
+                        }
+
+                        // Resposta efêmera de redirecionamento na tela do canal
+                        await interaction.editReply('✅ **Key validada com sucesso!** Verifique sua **DM (Mensagem Privada)** para pegar o seu link exclusivo do Telegram.');
                     });
-
-                    const linkExclusivo = respostaTelegram.data.result.invite_link;
-
-                    // Marca a key como usada no banco
-                    db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
-
-                    await interaction.editReply(`✅ **Acesso Liberado com Sucesso!**\n\nAqui está o seu link exclusivo para entrar no pack do Telegram. \n⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*\n\n🔗 ${linkExclusivo}`);
 
                 } catch (error) {
                     console.error('Erro ao gerar link:', error.response ? error.response.data : error.message);
