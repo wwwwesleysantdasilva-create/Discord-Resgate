@@ -63,11 +63,11 @@ app.post('/telegram-webhook', async (req, res) => {
             const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-            // ENTRADA
+            // ENTRADA (SÓ DISPARA A LOG COMPLETA APÓS A ENTRADA CONFIRMADA)
             if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
                 db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, registroExistente) => {
                     if (registroExistente) {
-                        db.run(`UPDATE rastro_eterno SET data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`, [dataHoraAtual, registroExistente.id]);
+                        db.run(`UPDATE rastro_eterno SET telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE id = ?`, [telegramUsername, dataHoraAtual, registroExistente.id]);
                         enviarWebhookDiscord(
                             `## LOGS  DE RESGATE\n\n` +
                             `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
@@ -101,11 +101,11 @@ app.post('/telegram-webhook', async (req, res) => {
                     }
                 });
             } 
-            // SAÍDA
+            // SAÍDA (CORRIGIDO PARA BUSCAR REGISTRO ATIVO)
             else if (['left', 'kicked'].includes(newStatus) && ['member', 'administrator', 'creator'].includes(oldStatus)) {
                 db.get(`SELECT * FROM rastro_eterno WHERE telegram_id = ? ORDER BY id DESC LIMIT 1`, [telegramId], (err, row) => {
-                    db.run(`UPDATE rastro_eterno SET data_saida_telegram = ?, status_atual = 'Saiu do Grupo' WHERE telegram_id = ?`, [dataHoraAtual, telegramId]);
                     if (row) {
+                        db.run(`UPDATE rastro_eterno SET data_saida_telegram = ?, status_atual = 'Saiu do Grupo' WHERE id = ?`, [dataHoraAtual, row.id]);
                         enviarWebhookDiscord(
                             `## LOG DE SAIDA\n\n` +
                             `<:theboxez:1543426459165532292> **| SAIDA DE:** ${row.produto}\n` +
@@ -165,7 +165,6 @@ client.on('interactionCreate', async interaction => {
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_key').setLabel('Cole a sua Key aqui:').setPlaceholder('Ex: SENSI-1234ABCD').setStyle(TextInputStyle.Short).setRequired(true)));
             return await interaction.showModal(modal);
         }
-        // ... (Outros modais mantidos iguais)
         if (id === 'btn_add_produto') {
             const modal = new ModalBuilder().setCustomId('modal_add_produto').setTitle('📦 Adicionar Novo Produto');
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_id').setLabel('Código (Ex: SENSI)').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_name').setLabel('Nome').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_group').setLabel('ID Telegram').setStyle(TextInputStyle.Short).setRequired(true)));
@@ -207,26 +206,10 @@ client.on('interactionCreate', async interaction => {
                         const linkExclusivo = respostaTelegram.data.result.invite_link;
                         const agora = new Date();
                         const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-                        const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-                        const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                         db.run(`UPDATE keys SET used = 1 WHERE key = ?`, [keyDigitada]);
                         db.run(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, key_usada, data_resgate, status_atual) VALUES (?, ?, ?, ?, ?, ?)`,
                             [userId, usuario, nomeProduto, keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
-                        );
-
-                        // NOVO LOG DE APROVAÇÃO (FORMATADO IGUAL O SEU PEDIDO)
-                        await enviarWebhookDiscord(
-                            `## LOGS  DE RESGATE\n\n` +
-                            `<:theboxez:1543426459165532292> **| PRODUTO:** ${nomeProduto}\n` +
-                            `<:emoji_49:1543470661744201868> **| KEY ULTILIZADA: ** \`${keyDigitada}\`\n\n` +
-                            `<:info:1543491941314863239> **| INFORMAÇÕES **\n\n` +
-                            `> **DC USER: ** <@${userId}>\n` +
-                            `> **DC ID: ** \`${userId}\`\n` +
-                            `> **TG USER:** Aguardando Entrada...\n` +
-                            `> **TG ID:** Aguardando Entrada...\n\n` +
-                            `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                            `<:relogio_StorM:1531049138291216414> **| HORA: ** \`${horaBr}\``
                         );
 
                         const containerDM = new ContainerBuilder().addTextDisplayComponents(
@@ -251,7 +234,6 @@ client.on('interactionCreate', async interaction => {
             });
         }
         
-        // Modal de Adicionar, Remover e Gerar mantidos...
         if (modalId === 'modal_add_produto') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
             const prodName = interaction.fields.getTextInputValue('prod_name').trim();
