@@ -3,10 +3,10 @@ const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionR
 const { createClient } = require('@libsql/client');
 const axios = require('axios');
 
-// Configuração do Banco de Dados Turso (Cloud SQLite)
+// Configuração segura do Banco de Dados Turso (Cloud SQLite)
 const db = createClient({
-    url: process.env.TURSO_DATABASE_URL,
-    authToken: process.env.TURSO_AUTH_TOKEN,
+    url: process.env.TURSO_DATABASE_URL || "libsql://dummy-url",
+    authToken: process.env.TURSO_AUTH_TOKEN || "dummy-token",
 });
 
 // Inicialização e criação das tabelas no Turso
