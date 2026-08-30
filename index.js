@@ -132,7 +132,7 @@ client.on('interactionCreate', async interaction => {
                 flags: MessageFlags.IsComponentsV2
             });
 
-            await interaction.reply({ content: '✅ Painel de resgate enviado com sucesso neste canal!', ephemeral: true });
+            await interaction.reply({ content: '✅ Painel de resgate enviado com sucesso neste canal!', flags: MessageFlags.Ephemeral });
         }
     } 
     else if (interaction.isButton()) {
@@ -181,11 +181,11 @@ client.on('interactionCreate', async interaction => {
         } else if (id === 'btn_registros') {
             db.all(`SELECT * FROM logs ORDER BY id DESC LIMIT 10`, async (err, rows) => {
                 if (err || !rows.length) {
-                    return interaction.reply({ content: '📜 Nenhum registro encontrado até o momento.', ephemeral: true });
+                    return interaction.reply({ content: '📜 Nenhum registro encontrado até o momento.', flags: MessageFlags.Ephemeral });
                 }
 
                 const listaLogs = rows.map(r => `• **[${r.timestamp}]** ${r.user}: ${r.action}`).join('\n');
-                await interaction.reply({ content: `📜 **Últimos Registros da Loja:**\n\n${listaLogs}`, ephemeral: true });
+                await interaction.reply({ content: `📜 **Últimos Registros da Loja:**\n\n${listaLogs}`, flags: MessageFlags.Ephemeral });
             });
         }
     } 
@@ -196,7 +196,7 @@ client.on('interactionCreate', async interaction => {
         if (modalId === 'modal_resgate') {
             const keyDigitada = interaction.fields.getTextInputValue('input_key').trim();
             
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             db.get(`SELECT * FROM keys WHERE key = ?`, [keyDigitada], async (err, row) => {
                 if (err || !row || row.used === 1) {
@@ -229,7 +229,6 @@ client.on('interactionCreate', async interaction => {
                             return interaction.editReply('⚠️ Sua Key foi validada, mas **suas DMs estão fechadas**! Abra suas DMs para receber o link ou tente novamente.');
                         }
 
-                        // Criação do botão de redirecionamento para a DM do bot
                         const botaoIrParaDM = new ButtonBuilder()
                             .setLabel('Abrir DM do Bot')
                             .setStyle(ButtonStyle.Link)
@@ -237,7 +236,6 @@ client.on('interactionCreate', async interaction => {
 
                         const linhaBotao = new ActionRowBuilder().addComponents(botaoIrParaDM);
 
-                        // Resposta efêmera com o texto exato e o botão configurado
                         await interaction.editReply({
                             content: '<:emoji_79:1543457009461100625> **Key Validada com Sucesso!**\n\nVerifique sua **DM (Mensagem privada)**\nPara acessar seu pack no app telegram',
                             components: [linhaBotao]
@@ -257,10 +255,10 @@ client.on('interactionCreate', async interaction => {
             const groupID = interaction.fields.getTextInputValue('prod_group').trim();
 
             db.run(`INSERT OR REPLACE INTO products (id, name, group_id) VALUES (?, ?, ?)`, [prodId, prodName, groupID], (err) => {
-                if (err) return interaction.reply({ content: '❌ Erro ao salvar produto no banco de dados.', ephemeral: true });
+                if (err) return interaction.reply({ content: '❌ Erro ao salvar produto no banco de dados.', flags: MessageFlags.Ephemeral });
                 
                 registrarLog(`Adicionou/Atualizou o produto: ${prodName} (${prodId})`, usuario);
-                interaction.reply({ content: `✅ Produto **${prodName}** (\`${prodId}\`) cadastrado com sucesso para o grupo \`${groupID}\`!`, ephemeral: true });
+                interaction.reply({ content: `✅ Produto **${prodName}** (\`${prodId}\`) cadastrado com sucesso para o grupo \`${groupID}\`!`, flags: MessageFlags.Ephemeral });
             });
 
         } else if (modalId === 'modal_del_produto') {
@@ -268,10 +266,10 @@ client.on('interactionCreate', async interaction => {
 
             db.run(`DELETE FROM products WHERE id = ?`, [prodId], function(err) {
                 if (this.changes === 0) {
-                    return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não foi encontrado.`, ephemeral: true });
+                    return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não foi encontrado.`, flags: MessageFlags.Ephemeral });
                 }
                 registrarLog(`Removeu o produto ID: ${prodId}`, usuario);
-                interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido com sucesso!`, ephemeral: true });
+                interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido com sucesso!`, flags: MessageFlags.Ephemeral });
             });
 
         } else if (modalId === 'modal_gerar_keys') {
@@ -279,12 +277,12 @@ client.on('interactionCreate', async interaction => {
             const qtd = parseInt(interaction.fields.getTextInputValue('quantidade')) || 1;
 
             if (qtd < 1 || qtd > 100) {
-                return interaction.reply({ content: '❌ A quantidade deve ser um número entre 1 e 100.', ephemeral: true });
+                return interaction.reply({ content: '❌ A quantidade deve ser um número entre 1 e 100.', flags: MessageFlags.Ephemeral });
             }
 
             db.get(`SELECT * FROM products WHERE id = ?`, [prodId], async (err, produto) => {
                 if (!produto) {
-                    return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não encontrado! Cadastre-o primeiro usando "Add produto".`, ephemeral: true });
+                    return interaction.reply({ content: `❌ Produto com código \`${prodId}\` não encontrado! Cadastre-o primeiro usando "Add produto".`, flags: MessageFlags.Ephemeral });
                 }
 
                 const keysGeradas = [];
@@ -305,7 +303,7 @@ client.on('interactionCreate', async interaction => {
 
                 await interaction.reply({ 
                     content: `✅ **${qtd} Key(s) gerada(s) para [${produto.name}]!**\n\n${keysGeradas.join('\n')}`, 
-                    ephemeral: true 
+                    flags: MessageFlags.Ephemeral 
                 });
             });
         }
