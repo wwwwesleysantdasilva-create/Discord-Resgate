@@ -96,22 +96,26 @@ async function enviarWebhookDiscord(mensagem) {
     }
 }
 
-// Rota que o Telegram vai chamar quando houver eventos de entrada/saída no grupo (chat_member)
+// Rota que o Telegram vai chamar quando houver eventos de entrada/saída no grupo
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
         
-        // Verifica se o evento é de alteração de membro no chat
-        if (update.chat_member) {
-            const chatMember = update.chat_member;
-            const user = chatMember.new_chat_member.user;
+        // Verifica se o evento é de alteração de membro no chat (chat_member ou my_chat_member)
+        const chatMemberEvent = update.chat_member || update.my_chat_member;
+
+        if (chatMemberEvent) {
+            const user = chatMemberEvent.new_chat_member.user;
+            // Ignora se o evento for do próprio bot
+            if (user.is_bot) return res.status(200).send('OK');
+
             const telegramId = user.id.toString();
             const telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
-            const newStatus = chatMember.new_chat_member.status;
-            const oldStatus = chatMember.old_chat_member.status;
+            const newStatus = chatMemberEvent.new_chat_member.status;
+            const oldStatus = chatMemberEvent.old_chat_member.status;
             const dataHoraAtual = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-            // Usuário ENTROU no grupo (member, creator, administrator vindo de left, kicked)
+            // Usuário ENTROU no grupo
             if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
                 
                 db.run(`UPDATE rastro_eterno SET telegram_id = ?, telegram_user = ?, data_entrada_telegram = ?, status_atual = 'No Grupo' WHERE telegram_id = ? OR telegram_id IS NULL ORDER BY id DESC LIMIT 1`,
@@ -309,6 +313,7 @@ client.on('interactionCreate', async interaction => {
                     const nomeProduto = produto ? produto.name : row.product;
 
                     try {
+                        // Garante a criação de um link com limite estrito de 1 uso e validade de 15 minutos
                         const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
                             chat_id: row.group_id,
                             member_limit: 1,
@@ -334,10 +339,10 @@ client.on('interactionCreate', async interaction => {
                             `📦 **Produto:** ${nomeProduto}\n` +
                             `🔑 **Key:** \`${keyDigitada}\`\n` +
                             `⏰ **Horário Aprovação:** \`${dataHoraResgate}\`\n` +
-                            `🔗 **Link de Convite gerado para Telegram**`
+                            `🔗 **Link de Convite exclusivo (1 uso / 15 min) gerado**`
                         );
 
-                        // Envio da DM com o container V2
+                        // Envio da DM com o container V2 e emojis restaurados
                         const containerDM = new ContainerBuilder()
                             .addTextDisplayComponents(
                                 new TextDisplayBuilder().setContent(
