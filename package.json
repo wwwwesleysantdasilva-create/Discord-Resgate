@@ -1,0 +1,13 @@
+{
+  "name": "bot-resgate-discord",
+  "version": "1.0.0",
+  "description": "Bot para resgate de keys da loja",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
+  }
+}
