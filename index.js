@@ -57,7 +57,7 @@ client.on('interactionCreate', async interaction => {
         if (interaction.commandName === 'painel') {
             const container = new ContainerBuilder()
                 .addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent('### <:mundo_StorM:1530945775679307786> | Dashboard \n\n——————')
+                    new TextDisplayBuilder().setContent('### <:mundo_StorM:1530945775679307786> | Dashboard \n\n')
                 );
 
             // Linha 1 de Botões (Cinza / Secondary)
