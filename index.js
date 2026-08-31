@@ -66,6 +66,14 @@ async function inicializarBanco() {
                 status_atual TEXT
             );
         `);
+        
+        // NOVO (Cirúrgico): Adiciona a coluna para salvar o link único do usuário, sem quebrar o banco atual
+        try {
+            await pool.query(`ALTER TABLE rastro_eterno ADD COLUMN invite_link TEXT;`);
+        } catch (e) {
+            // Se cair aqui, a coluna já existe, ignoramos.
+        }
+        
         console.log('✅ Tabelas no Supabase prontas!');
     } catch (dbError) {
         console.error('❌ Erro ao conectar/inicializar o banco no Supabase:', dbError.message);
@@ -108,7 +116,7 @@ app.post('/telegram-webhook', async (req, res) => {
         const update = req.body;
         console.log("📥 [RAIO-X] Recebido do Telegram:", JSON.stringify(update, null, 2));
 
-        let telegramId, telegramUsername, chatId, entrouNoGrupo, saiuDoGrupo;
+        let telegramId, telegramUsername, chatId, entrouNoGrupo, saiuDoGrupo, inviteLinkUsado = null;
 
         // Tenta capturar pelo formato 1 (Supergrupos)
         if (update.chat_member) {
@@ -124,6 +132,11 @@ app.post('/telegram-webhook', async (req, res) => {
             const newStatus = update.chat_member.new_chat_member?.status;
             entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus);
             saiuDoGrupo = ['left', 'kicked'].includes(newStatus);
+
+            // NOVO: Captura o link exato que a pessoa usou para entrar
+            if (entrouNoGrupo && update.chat_member.invite_link) {
+                inviteLinkUsado = update.chat_member.invite_link.invite_link;
+            }
         } 
         // Tenta capturar pelo formato 2 (Grupos Normais)
         else if (update.message && update.message.new_chat_members) {
@@ -153,7 +166,7 @@ app.post('/telegram-webhook', async (req, res) => {
             return res.status(200).send('OK');
         }
 
-        console.log(`🔎 Processando - Usuário: ${telegramUsername} | TG ID: ${telegramId} | Ação: ${entrouNoGrupo ? 'Entrou' : saiuDoGrupo ? 'Saiu' : 'Nenhuma'} | Grupo ID recebido: ${chatId}`);
+        console.log(`🔎 Processando - TG USER: ${telegramUsername} | TG ID: ${telegramId} | Ação: ${entrouNoGrupo ? 'Entrou' : saiuDoGrupo ? 'Saiu' : 'Nenhuma'} | Link usado: ${inviteLinkUsado || 'Nenhum'}`);
 
         const agora = new Date();
         const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -182,15 +195,27 @@ app.post('/telegram-webhook', async (req, res) => {
                 const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
                 enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
             } else {
-                console.log(`🔍 Buscando rastro PENDENTE flexível para o group_id: ${chatId}`);
-                // Busca flexível aceitando com ou sem o sinal de menos (-) no group_id para evitar falhas de ID
-                const resUltimo = await pool.query(
-                    `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND (group_id = $1 OR group_id = $2) ORDER BY id DESC LIMIT 1`, 
-                    [chatId, chatId.startsWith('-') ? chatId.substring(1) : `-${chatId}`]
-                );
+                console.log(`🔍 Buscando rastro PENDENTE...`);
+                let resUltimo;
+
+                // 1ª TENTATIVA INFALÍVEL: Pelo Link Exato que a pessoa usou (Evita cruzamento de dados 100%)
+                if (inviteLinkUsado) {
+                    resUltimo = await pool.query(
+                        `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND invite_link = $1 ORDER BY id ASC LIMIT 1`, 
+                        [inviteLinkUsado]
+                    );
+                }
+
+                // 2ª TENTATIVA (Fallback de Segurança): Se o Telegram não enviou o link, busca pela Fila do Grupo (Corrigido o ASC)
+                if (!resUltimo || resUltimo.rows.length === 0) {
+                    resUltimo = await pool.query(
+                        `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND (group_id = $1 OR group_id = $2 OR group_id = $3) ORDER BY id ASC LIMIT 1`, 
+                        [chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]
+                    );
+                }
                 
-                if (resUltimo.rows.length > 0) {
-                    console.log("✅ Rastro pendente encontrado! Vinculando a conta do Telegram e enviando Webhook.");
+                if (resUltimo && resUltimo.rows.length > 0) {
+                    console.log("✅ Rastro pendente encontrado! Vinculando a conta e enviando Webhook.");
                     const ultimoGerado = resUltimo.rows[0];
                     await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]);
                     
@@ -208,7 +233,7 @@ app.post('/telegram-webhook', async (req, res) => {
                     const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
                     enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
                 } else {
-                    console.log(`⚠️ ALERTA: Ninguém esperando para entrar no grupo ${chatId} ou o ID do Telegram inserido no produto está diferente desse número!`);
+                    console.log(`⚠️ ALERTA: Ninguém na fila esperando para entrar nesse grupo ou ID divergente.`);
                 }
             }
         } 
@@ -341,11 +366,12 @@ client.on('interactionCreate', async interaction => {
                 const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                 await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
-                await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
+                
+                // NOVO: Adicionado 'invite_link' na gravação inicial, garantindo que esse registro pertence a ESTE link!
+                await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                    [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]
                 );
 
-                // NOVO: Registrando log de resgate de key
                 await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
 
                 const containerDM = new ContainerBuilder().addTextDisplayComponents(
@@ -377,18 +403,12 @@ client.on('interactionCreate', async interaction => {
             const groupID = interaction.fields.getTextInputValue('prod_group').trim();
             
             await pool.query(`INSERT INTO products (id, name, group_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $2, group_id = $3`, [prodId, prodName, groupID]);
-            
-            // NOVO: Registrando log de adição/edição de produto
             await registrarLog(`Cadastrou/Atualizou o produto ${prodId}`, usuario);
-            
             interaction.reply({ content: `✅ Produto \`${prodId}\` cadastrado!`, flags: MessageFlags.Ephemeral });
         } else if (modalId === 'modal_del_produto') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
             await pool.query(`DELETE FROM products WHERE id = $1`, [prodId]);
-            
-            // NOVO: Registrando log de exclusão de produto
             await registrarLog(`Removeu o produto ${prodId}`, usuario);
-            
             interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido!`, flags: MessageFlags.Ephemeral });
         } else if (modalId === 'modal_gerar_keys') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
@@ -408,9 +428,7 @@ client.on('interactionCreate', async interaction => {
                 keysGeradas.push(`\`${keyFinal}\``);
             }
 
-            // NOVO: Registrando log de geração de keys
             await registrarLog(`Gerou ${qtd} key(s) para o produto ${prodId}`, usuario);
-
             interaction.reply({ content: `✅ **${qtd} Key(s) gerada(s)!**\n\n${keysGeradas.join('\n')}`, flags: MessageFlags.Ephemeral });
         }
     }
