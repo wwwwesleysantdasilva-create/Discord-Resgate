@@ -21,7 +21,7 @@ const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
-// CONEXÃO COM O SUPABASE (POSTGRESQL) - BLINDADO CONTRA ERROS DE REDE DO RAILWAY
+// CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
@@ -63,16 +63,12 @@ async function inicializarBanco() {
                 data_resgate TEXT,
                 data_entrada_telegram TEXT,
                 data_saida_telegram TEXT,
-                status_atual TEXT
+                status_atual TEXT,
+                invite_link TEXT
             );
         `);
         
-        // NOVO (Cirúrgico): Adiciona a coluna para salvar o link único do usuário, sem quebrar o banco atual
-        try {
-            await pool.query(`ALTER TABLE rastro_eterno ADD COLUMN invite_link TEXT;`);
-        } catch (e) {
-            // Se cair aqui, a coluna já existe, ignoramos.
-        }
+        try { await pool.query(`ALTER TABLE rastro_eterno ADD COLUMN invite_link TEXT;`); } catch (e) { }
         
         console.log('✅ Tabelas no Supabase prontas!');
     } catch (dbError) {
@@ -88,37 +84,34 @@ async function registrarLog(acao, usuario) {
         const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
         await pool.query(`INSERT INTO logs (action, "user", timestamp) VALUES ($1, $2, $3)`, [acao, usuario, dataHora]);
     } catch (e) {
-        console.error('Erro ao registrar log:', e.message);
+        console.error('Erro ao registrar log interno:', e.message);
     }
 }
 
-async function enviarWebhookDiscord(payload) {
+async function enviarWebhookDiscord(texto) {
     if (!DISCORD_WEBHOOK_URL) {
         console.log('⚠️ DISCORD_WEBHOOK_URL não está configurada!');
         return;
     }
     try { 
         const urlLimpa = DISCORD_WEBHOOK_URL.trim();
-        await axios.post(urlLimpa, payload, {
+        await axios.post(urlLimpa, { content: texto }, {
             headers: { 'Content-Type': 'application/json' }
         }); 
         console.log('✅ Webhook do Discord enviado com sucesso!');
     } catch (error) { 
-        console.error('❌ Erro detalhado ao enviar webhook para o Discord:', error.response ? JSON.stringify(error.response.data) : error.message); 
+        console.error('❌ Erro ao enviar webhook para o Discord:', error.message); 
     }
 }
 
 // ---------------------------------------------------------
-// BLOCO CIRÚRGICO 2: ROTA TELEGRAM BLINDADA E COM RAIO-X
+// ROTA TELEGRAM BLINDADA
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
-        console.log("📥 [RAIO-X] Recebido do Telegram:", JSON.stringify(update, null, 2));
-
         let telegramId, telegramUsername, chatId, entrouNoGrupo, saiuDoGrupo, inviteLinkUsado = null;
 
-        // Tenta capturar pelo formato 1 (Supergrupos)
         if (update.chat_member) {
             const user = update.chat_member.new_chat_member?.user || update.chat_member.from;
             if (user && user.is_bot) return res.status(200).send('OK');
@@ -133,12 +126,10 @@ app.post('/telegram-webhook', async (req, res) => {
             entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus);
             saiuDoGrupo = ['left', 'kicked'].includes(newStatus);
 
-            // NOVO: Captura o link exato que a pessoa usou para entrar
             if (entrouNoGrupo && update.chat_member.invite_link) {
                 inviteLinkUsado = update.chat_member.invite_link.invite_link;
             }
         } 
-        // Tenta capturar pelo formato 2 (Grupos Normais)
         else if (update.message && update.message.new_chat_members) {
             const user = update.message.new_chat_members[0];
             if (user.is_bot) return res.status(200).send('OK');
@@ -162,11 +153,7 @@ app.post('/telegram-webhook', async (req, res) => {
             return res.status(200).send('OK');
         }
 
-        if (!telegramId || !chatId) {
-            return res.status(200).send('OK');
-        }
-
-        console.log(`🔎 Processando - TG USER: ${telegramUsername} | TG ID: ${telegramId} | Ação: ${entrouNoGrupo ? 'Entrou' : saiuDoGrupo ? 'Saiu' : 'Nenhuma'} | Link usado: ${inviteLinkUsado || 'Nenhum'}`);
+        if (!telegramId || !chatId) return res.status(200).send('OK');
 
         const agora = new Date();
         const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -174,71 +161,58 @@ app.post('/telegram-webhook', async (req, res) => {
         const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
         if (entrouNoGrupo) {
-            const resExistente = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
-            
-            if (resExistente.rows.length > 0) {
-                console.log("🔄 O usuário já tinha log antes. Permitindo envio duplicado para testes.");
-                const registroExistente = resExistente.rows[0];
-                await pool.query(`UPDATE rastro_eterno SET telegram_user = $1, data_entrada_telegram = $2, status_atual = 'No Grupo' WHERE id = $3`, [telegramUsername, dataHoraAtual, registroExistente.id]);
+            let rastroEncontrado = null;
+
+            if (inviteLinkUsado) {
+                const res = await pool.query(
+                    `SELECT * FROM rastro_eterno WHERE status_atual = 'Aguardando Entrada no Telegram' AND invite_link = $1 ORDER BY id ASC LIMIT 1`,
+                    [inviteLinkUsado]
+                );
+                if (res.rows.length > 0) rastroEncontrado = res.rows[0];
+            }
+
+            if (!rastroEncontrado) {
+                const res = await pool.query(
+                    `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND (group_id = $1 OR group_id = $2 OR group_id = $3) ORDER BY id ASC LIMIT 1`,
+                    [chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]
+                );
+                if (res.rows.length > 0) rastroEncontrado = res.rows[0];
+            }
+
+            if (rastroEncontrado) {
+                await pool.query(
+                    `UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, 
+                    [telegramId, telegramUsername, dataHoraAtual, rastroEncontrado.id]
+                );
                 
-                const conteudoLog = `## LOG DE RESGATE\n\n` +
-                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
-                    `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${registroExistente.key_usada}\`\n\n` +
+                const conteudoLog = `## LOGS DE RESGATE\n\n` +
+                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${rastroEncontrado.produto}\n` +
+                    `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${rastroEncontrado.key_usada}\`\n\n` +
                     `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                    `> **DC USER:** <@${registroExistente.discord_id}>\n` +
-                    `> **DC ID:** \`${registroExistente.discord_id}\`\n` +
+                    `> **DC USER:** <@${rastroEncontrado.discord_id}>\n` +
+                    `> **DC ID:** \`${rastroEncontrado.discord_id}\`\n` +
                     `> **TG USER:** ${telegramUsername}\n` +
                     `> **TG ID:** \`${telegramId}\`\n\n` +
                     `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
                     `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``;
 
-                const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
-                enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
-            } else {
-                console.log(`🔍 Buscando rastro PENDENTE...`);
-                let resUltimo;
-
-                // 1ª TENTATIVA INFALÍVEL: Pelo Link Exato que a pessoa usou (Evita cruzamento de dados 100%)
-                if (inviteLinkUsado) {
-                    resUltimo = await pool.query(
-                        `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND invite_link = $1 ORDER BY id ASC LIMIT 1`, 
-                        [inviteLinkUsado]
-                    );
-                }
-
-                // 2ª TENTATIVA (Fallback de Segurança): Se o Telegram não enviou o link, busca pela Fila do Grupo (Corrigido o ASC)
-                if (!resUltimo || resUltimo.rows.length === 0) {
-                    resUltimo = await pool.query(
-                        `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND (group_id = $1 OR group_id = $2 OR group_id = $3) ORDER BY id ASC LIMIT 1`, 
-                        [chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]
-                    );
-                }
+                enviarWebhookDiscord(conteudoLog);
+            } 
+            else {
+                const resExistente = await pool.query(
+                    `SELECT * FROM rastro_eterno WHERE telegram_id = $1 AND (group_id = $2 OR group_id = $3 OR group_id = $4) ORDER BY id DESC LIMIT 1`, 
+                    [telegramId, chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]
+                );
                 
-                if (resUltimo && resUltimo.rows.length > 0) {
-                    console.log("✅ Rastro pendente encontrado! Vinculando a conta e enviando Webhook.");
-                    const ultimoGerado = resUltimo.rows[0];
-                    await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]);
-                    
-                    const conteudoLog = `## LOG DE RESGATE\n\n` +
-                        `<:theboxez:1543426459165532292> **| PRODUTO:** ${ultimoGerado.produto}\n` +
-                        `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${ultimoGerado.key_usada}\`\n\n` +
-                        `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                        `> **DC USER:** <@${ultimoGerado.discord_id}>\n` +
-                        `> **DC ID:** \`${ultimoGerado.discord_id}\`\n` +
-                        `> **TG USER:** ${telegramUsername}\n` +
-                        `> **TG ID:** \`${telegramId}\`\n\n` +
-                        `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                        `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``;
-
-                    const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
-                    enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
+                if (resExistente.rows.length > 0) {
+                    await pool.query(`UPDATE rastro_eterno SET data_entrada_telegram = $1, status_atual = 'No Grupo' WHERE id = $2`, [dataHoraAtual, resExistente.rows[0].id]);
                 } else {
-                    console.log(`⚠️ ALERTA: Ninguém na fila esperando para entrar nesse grupo ou ID divergente.`);
+                    enviarWebhookDiscord(`⚠️ **[LOG TELEGRAM - ENTRADA SEM REGISTRO]**\nUsuário ${telegramUsername} (\`ID: ${telegramId}\`) entrou no grupo, mas nenhuma Key foi encontrada para ele.`);
                 }
             }
         } 
         else if (saiuDoGrupo) {
-            const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
+            const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 AND (group_id = $2 OR group_id = $3 OR group_id = $4) ORDER BY id DESC LIMIT 1`, [telegramId, chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]);
             if (resSaida.rows.length > 0) {
                 const row = resSaida.rows[0];
                 await pool.query(`UPDATE rastro_eterno SET data_saida_telegram = $1, status_atual = 'Saiu do Grupo' WHERE id = $2`, [dataHoraAtual, row.id]);
@@ -254,8 +228,7 @@ app.post('/telegram-webhook', async (req, res) => {
                     `<:calendar:1543440066209120387> **| DATA DA SAÍDA:** \`${dataBr}\`\n` +
                     `<:relogio_StorM:1531049138291216414> **| HORA DA SAÍDA:** \`${horaBr}\``;
 
-                const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(conteudoLog));
-                enviarWebhookDiscord({ components: [container.toJSON()], flags: MessageFlags.IsComponentsV2 });
+                enviarWebhookDiscord(conteudoLog);
             }
         }
         res.status(200).send('OK');
@@ -362,17 +335,33 @@ client.on('interactionCreate', async interaction => {
                 });
 
                 const linkExclusivo = respostaTelegram.data.result.invite_link;
+                
                 const agora = new Date();
                 const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+                const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+                const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                 await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
                 
-                // NOVO: Adicionado 'invite_link' na gravação inicial, garantindo que esse registro pertence a ESTE link!
                 await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                     [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]
                 );
 
                 await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
+
+                // ENVIO DO LOG VISUAL IDENTICO À IMAGEM 3
+                enviarWebhookDiscord(
+                    `## LOGS DE RESGATE\n\n` +
+                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${nomeProduto}\n` +
+                    `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${keyDigitada}\`\n\n` +
+                    `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                    `> **DC USER:** <@${userId}>\n` +
+                    `> **DC ID:** \`${userId}\`\n` +
+                    `> **TG USER:** Aguardando Entrada...\n` +
+                    `> **TG ID:** Aguardando Entrada...\n\n` +
+                    `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
+                    `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
+                );
 
                 const containerDM = new ContainerBuilder().addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e expira em 15 minutos.**`)
