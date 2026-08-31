@@ -19,7 +19,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
-app.get('/', (req, res) => res.send('🤖 Bot online!'));
+app.get('/', (req, res) => res.send('🤖 Bot online! (Modo Raio-X Ativado)'));
 
 // CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
@@ -95,125 +95,32 @@ async function enviarWebhookDiscord(texto) {
 }
 
 // ---------------------------------------------------------
-// ROTA TELEGRAM: ESPELHO EXATO DO SEU BOT ANTIGO
+// ROTA TELEGRAM: DETECTOR DE MENTIRAS (RAIO-X PURO)
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
-        const chatMemberEvent = update.chat_member || update.my_chat_member;
+        
+        // 1. IMPRIME TUDO QUE CHEGA, SEM FILTROS.
+        console.log("==========================================");
+        console.log("📥 NOVO SINAL DO TELEGRAM RECEBIDO:");
+        console.log(JSON.stringify(update, null, 2));
+        console.log("==========================================");
 
-        if (chatMemberEvent) {
-            const user = chatMemberEvent.new_chat_member.user;
-            if (user.is_bot) return res.status(200).send('OK');
-
-            const telegramId = user.id.toString();
-            const telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
-            const newStatus = chatMemberEvent.new_chat_member.status;
-            const oldStatus = chatMemberEvent.old_chat_member.status;
-            
-            const agora = new Date();
-            const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-            const dataBr = agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-            const horaBr = agora.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-            // USUÁRIO ENTROU
-            if (['member', 'administrator', 'creator'].includes(newStatus) && ['left', 'kicked', 'restricted'].includes(oldStatus)) {
-                
-                // 1. Verifica se já existe (Re-entrada / Update)
-                const resExistente = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
-                
-                if (resExistente.rows.length > 0) {
-                    const registroExistente = resExistente.rows[0];
-                    await pool.query(`UPDATE rastro_eterno SET data_entrada_telegram = $1, status_atual = 'No Grupo' WHERE id = $2`, [dataHoraAtual, registroExistente.id]);
-
-                    enviarWebhookDiscord(
-                        `## LOGS DE RESGATE\n\n` +
-                        `<:theboxez:1543426459165532292> **| PRODUTO:** ${registroExistente.produto}\n` +
-                        `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${registroExistente.key_usada}\`\n\n` +
-                        `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                        `> **DC USER:** <@${registroExistente.discord_id}>\n` +
-                        `> **DC ID:** \`${registroExistente.discord_id}\`\n` +
-                        `> **TG USER:** ${telegramUsername}\n` +
-                        `> **TG ID:** \`${telegramId}\`\n\n` +
-                        `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                        `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
-                    );
-                } else {
-                    // 2. É uma entrada nova! Procura a Key na fila
-                    let ultimoGerado = null;
-
-                    // Busca primeiro pelo link blindado
-                    if (chatMemberEvent.invite_link) {
-                        const inviteUsado = chatMemberEvent.invite_link.invite_link;
-                        const resLink = await pool.query(`SELECT * FROM rastro_eterno WHERE status_atual = 'Aguardando Entrada no Telegram' AND invite_link = $1 ORDER BY id ASC LIMIT 1`, [inviteUsado]);
-                        if (resLink.rows.length > 0) ultimoGerado = resLink.rows[0];
-                    }
-
-                    // Se falhou o link, busca "às cegas" o primeiro da fila (Igual seu bot antigo)
-                    if (!ultimoGerado) {
-                        const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
-                        if (resAguardando.rows.length > 0) ultimoGerado = resAguardando.rows[0];
-                    }
-
-                    if (ultimoGerado) {
-                        await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, [telegramId, telegramUsername, dataHoraAtual, ultimoGerado.id]);
-
-                        enviarWebhookDiscord(
-                            `## LOGS DE RESGATE\n\n` +
-                            `<:theboxez:1543426459165532292> **| PRODUTO:** ${ultimoGerado.produto}\n` +
-                            `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${ultimoGerado.key_usada}\`\n\n` +
-                            `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                            `> **DC USER:** <@${ultimoGerado.discord_id}>\n` +
-                            `> **DC ID:** \`${ultimoGerado.discord_id}\`\n` +
-                            `> **TG USER:** ${telegramUsername}\n` +
-                            `> **TG ID:** \`${telegramId}\`\n\n` +
-                            `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
-                            `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``
-                        );
-                    } else {
-                        enviarWebhookDiscord(
-                            `📥 **[LOG TELEGRAM - ENTRADA SUSPEITA / SEM REGISTRO]**\n\n` +
-                            `📱 **Telegram:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                            `⚠️ **Aviso:** Entrou no grupo, mas nenhuma key foi encontrada no sistema para vincular a ele.`
-                        );
-                    }
-                }
-            } 
-            // USUÁRIO SAIU
-            else if (['left', 'kicked'].includes(newStatus) && ['member', 'administrator', 'creator'].includes(oldStatus)) {
-                
-                const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
-
-                if (resSaida.rows.length > 0) {
-                    const row = resSaida.rows[0];
-                    await pool.query(`UPDATE rastro_eterno SET data_saida_telegram = $1, status_atual = 'Saiu do Grupo' WHERE id = $2`, [dataHoraAtual, row.id]);
-
-                    enviarWebhookDiscord(
-                        `## LOG DE SAÍDA\n\n` +
-                        `<:theboxez:1543426459165532292> **| SAÍDA DE:** ${row.produto}\n` +
-                        `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
-                        `> **DC USER:** <@${row.discord_id}>\n` +
-                        `> **DC ID:** \`${row.discord_id}\`\n` +
-                        `> **TG USER:** ${telegramUsername}\n` +
-                        `> **TG ID:** \`${telegramId}\`\n\n` +
-                        `<:calendar:1543440066209120387> **| DATA DA SAÍDA:** \`${dataBr}\`\n` +
-                        `<:relogio_StorM:1531049138291216414> **| HORA DA SAÍDA:** \`${horaBr}\``
-                    );
-                } else {
-                    enviarWebhookDiscord(
-                        `📤 **[LOG TELEGRAM - SAÍDA SEM REGISTRO PRÉVIO]**\n\n` +
-                        `👤 **Membro:** ${telegramUsername} (\`ID: ${telegramId}\`)\n` +
-                        `🔴 **Status:** Deixou o grupo do Telegram.`
-                    );
-                }
-            }
+        // Se o Telegram enviou apenas uma mensagem de ping/update, retorna OK.
+        if (!update.chat_member && !update.message) {
+            return res.status(200).send('OK');
         }
+
+        // Retornamos OK para o Telegram saber que recebemos, 
+        // temporariamente pulamos a lógica do banco só para testar a entrega do Telegram
         res.status(200).send('OK');
-    } catch (err) {
-        console.error('❌ Erro no webhook do telegram:', err.message);
-        res.status(500).send('Error');
+    } catch (err) { 
+        console.error('❌ Erro na rota telegram-webhook:', err.message);
+        res.status(500).send('Error'); 
     }
 });
+// ---------------------------------------------------------
 
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
