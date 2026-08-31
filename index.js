@@ -5,7 +5,7 @@ if (dns.setDefaultResultOrder) {
     dns.setDefaultResultOrder('ipv4first');
 }
 
-const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { Pool } = require('pg');
 const axios = require('axios');
 const express = require('express');
@@ -16,9 +16,9 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
-const TELEGRAM_LOG_GROUP_ID = '-1003713776395';
+const TELEGRAM_LOG_GROUP_ID = '-1003713776395'; // Seu grupo privado de logs
 
-app.get('/', (req, res) => res.send('🤖 Bot online! (Log Telegram Ativado)'));
+app.get('/', (req, res) => res.send('🤖 Bot online! (Sistema Definitivo de Logs Cruzadas Ativado)'));
 
 // CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
@@ -81,22 +81,21 @@ async function registrarLog(acao, usuario) {
     try {
         const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
         await pool.query(`INSERT INTO logs (action, "user", timestamp) VALUES ($1, $2, $3)`, [acao, usuario, dataHora]);
-    } catch (e) { console.error('Erro ao registrar log interno:', e.message); }
+    } catch (e) { }
 }
 
 // ---------------------------------------------------------
-// FUNÇÃO: GERA O ARQUIVO .TXT E MANDA PRO GRUPO DO TELEGRAM
+// FUNÇÃO DEFINITIVA: GERA O ARQUIVO .TXT E MANDA PRO TELEGRAM
 // ---------------------------------------------------------
 async function enviarLogComArquivoTelegram(dados) {
     if (!TELEGRAM_TOKEN) return;
     try {
         const conteudoTxt = 
-`===== LOG DE ATENDIMENTO (SISTEMA CRUZADO) =====
+`===== LOG DE ATENDIMENTO (SISTEMA CRUZADO DEFINITIVO) =====
 
 [ DADOS DO DISCORD ]
 Usuário: ${dados.discordTag}
 ID: ${dados.discordId}
-Menção: <@${dados.discordId}>
 
 [ DADOS DO TELEGRAM ]
 Nome: ${dados.telegramNome}
@@ -112,9 +111,8 @@ Grupo Liberado: ${dados.groupId}
 Resgate da Key: ${dados.dataResgate}
 Entrada no Grupo: ${dados.dataEntrada}`;
 
-        const mensagemTexto = `✅ <b>NOVO RESGATE E ENTRADA CONFIRMADOS</b>\n📦 <b>Produto:</b> ⚙️ ${dados.produto}\n🎮 <b>Discord:</b> ${dados.discordTag} (<code>${dados.discordId}</code>)\n📱 <b>Telegram:</b> ${dados.telegramNome}\n🕒 <b>Hora da Entrada:</b> ${dados.dataEntrada}`;
+        const mensagemTexto = `✅ <b>NOVO RESGATE E ENTRADA CONFIRMADOS</b>\n📦 <b>Produto:</b> ⚙️ ${dados.produto}\n🎮 <b>Discord:</b> ${dados.discordTag} (<code>${dados.discordId}</code>)\n📱 <b>Telegram:</b> ${dados.telegramNome} (<code>${dados.telegramId}</code>)\n🕒 <b>Entrada:</b> ${dados.dataEntrada}`;
         
-        // Monta o arquivo direto na memória (Buffer) para enviar via Axios sem dar erro no servidor
         const boundary = '----BotBoundary' + Date.now();
         const nomeArquivo = `log_${dados.telegramId}_${Date.now()}.txt`;
         
@@ -135,7 +133,7 @@ Entrada no Grupo: ${dados.dataEntrada}`;
 }
 
 // ---------------------------------------------------------
-// ROTA TELEGRAM: CRUZAMENTO DE DADOS PELO INVITE LINK
+// ROTA TELEGRAM: CRUZAMENTO DE DADOS BLINDADO
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
@@ -161,14 +159,14 @@ app.post('/telegram-webhook', async (req, res) => {
 
                     let rastro = null;
 
-                    // 1. O CRUZAMENTO PERFEITO: Procura pelo link exato que o usuário clicou
+                    // Procura com precisão cirúrgica qual link o usuário usou
                     if (chatMemberEvent.invite_link && chatMemberEvent.invite_link.invite_link) {
                         const linkUsado = chatMemberEvent.invite_link.invite_link;
                         const resLink = await pool.query(`SELECT * FROM rastro_eterno WHERE invite_link = $1 AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id DESC LIMIT 1`, [linkUsado]);
                         if (resLink.rows.length > 0) rastro = resLink.rows[0];
                     }
 
-                    // 2. FALLBACK: Se o Telegram não mandar o link, puxa o último que gerou a key
+                    // Fallback de segurança (caso o Telegram omita o link)
                     if (!rastro) {
                         const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
                         if (resAguardando.rows.length > 0) rastro = resAguardando.rows[0];
@@ -179,7 +177,7 @@ app.post('/telegram-webhook', async (req, res) => {
                             [telegramId, telegramUsername, dataHoraAtual, rastro.id]
                         );
 
-                        // Dispara a criação do .txt e envio para o grupo do Telegram
+                        // Dispara a criação do .txt e envio imediato
                         await enviarLogComArquivoTelegram({
                             discordTag: rastro.discord_tag,
                             discordId: rastro.discord_id,
@@ -206,6 +204,7 @@ app.post('/telegram-webhook', async (req, res) => {
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
     
+    // ATRELA O WEBHOOK AUTOMATICAMENTE NO START
     if (TELEGRAM_TOKEN && RAILWAY_PUBLIC_DOMAIN) {
         const domain = RAILWAY_PUBLIC_DOMAIN.startsWith('http') ? RAILWAY_PUBLIC_DOMAIN : `https://${RAILWAY_PUBLIC_DOMAIN}`;
         const webhookUrl = `${domain}/telegram-webhook`;
@@ -215,9 +214,9 @@ client.once('clientReady', async () => {
                 url: webhookUrl,
                 allowed_updates: ["message", "chat_member", "my_chat_member"]
             });
-            console.log(`✅ Webhook Telegram atrelado com sucesso a: ${webhookUrl}`);
+            console.log(`✅ Webhook atrelado com sucesso a: ${webhookUrl}`);
         } catch (webhookErr) {
-            console.error('❌ Erro ao registrar Webhook no Telegram:', webhookErr.message);
+            console.error('❌ Erro ao registrar Webhook:', webhookErr.message);
         }
     }
 
@@ -228,7 +227,7 @@ client.once('clientReady', async () => {
 
     try {
         for (const guild of client.guilds.cache.values()) await guild.commands.set(commands);
-    } catch (error) { console.error(error); }
+    } catch (error) { }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -307,7 +306,7 @@ client.on('interactionCreate', async interaction => {
 
                 await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
                 
-                // Salva o linkExclusivo atrelado à Key no banco de rastreio
+                // Salva o link no banco para o Webhook achar o dono depois
                 await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                     [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]
                 );
@@ -333,7 +332,7 @@ client.on('interactionCreate', async interaction => {
 
             } catch (error) { 
                 console.error(error);
-                interaction.editReply('❌ Falha ao comunicar com o Telegram.'); 
+                interaction.editReply('❌ Falha ao comunicar com o Telegram para gerar convite.'); 
             }
         }
         
