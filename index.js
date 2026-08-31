@@ -105,12 +105,12 @@ async function enviarWebhookDiscord(texto) {
 }
 
 // ---------------------------------------------------------
-// ROTA TELEGRAM BLINDADA
+// ROTA TELEGRAM BLINDADA E CORRIGIDA PARA ENTRADA/SAÍDA
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const update = req.body;
-        let telegramId, telegramUsername, chatId, entrouNoGrupo, saiuDoGrupo, inviteLinkUsado = null;
+        let telegramId, telegramUsername, chatId, entrouNoGrupo = false, saiuDoGrupo = false, inviteLinkUsado = null;
 
         if (update.chat_member) {
             const user = update.chat_member.new_chat_member?.user || update.chat_member.from;
@@ -123,8 +123,11 @@ app.post('/telegram-webhook', async (req, res) => {
             chatId = update.chat_member.chat?.id ? update.chat_member.chat.id.toString() : null;
             
             const newStatus = update.chat_member.new_chat_member?.status;
-            entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus);
-            saiuDoGrupo = ['left', 'kicked'].includes(newStatus);
+            const oldStatus = update.chat_member.old_chat_member?.status;
+            
+            // Lógica idêntica ao seu bot antigo para evitar falsos positivos
+            entrouNoGrupo = ['member', 'administrator', 'creator'].includes(newStatus) && !['member', 'administrator', 'creator'].includes(oldStatus);
+            saiuDoGrupo = ['left', 'kicked'].includes(newStatus) && ['member', 'administrator', 'creator'].includes(oldStatus);
 
             if (entrouNoGrupo && update.chat_member.invite_link) {
                 inviteLinkUsado = update.chat_member.invite_link.invite_link;
@@ -138,7 +141,6 @@ app.post('/telegram-webhook', async (req, res) => {
             telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
             chatId = update.message.chat.id.toString();
             entrouNoGrupo = true;
-            saiuDoGrupo = false;
         }
         else if (update.message && update.message.left_chat_member) {
             const user = update.message.left_chat_member;
@@ -147,13 +149,10 @@ app.post('/telegram-webhook', async (req, res) => {
             telegramId = user.id.toString();
             telegramUsername = user.username ? `@${user.username}` : (user.first_name || 'Desconhecido');
             chatId = update.message.chat.id.toString();
-            entrouNoGrupo = false;
             saiuDoGrupo = true;
-        } else {
-            return res.status(200).send('OK');
         }
 
-        if (!telegramId || !chatId) return res.status(200).send('OK');
+        if (!telegramId || (!entrouNoGrupo && !saiuDoGrupo)) return res.status(200).send('OK');
 
         const agora = new Date();
         const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -163,19 +162,15 @@ app.post('/telegram-webhook', async (req, res) => {
         if (entrouNoGrupo) {
             let rastroEncontrado = null;
 
+            // 1. Tenta Link Exclusivo (O mais seguro)
             if (inviteLinkUsado) {
-                const res = await pool.query(
-                    `SELECT * FROM rastro_eterno WHERE status_atual = 'Aguardando Entrada no Telegram' AND invite_link = $1 ORDER BY id ASC LIMIT 1`,
-                    [inviteLinkUsado]
-                );
+                const res = await pool.query(`SELECT * FROM rastro_eterno WHERE status_atual = 'Aguardando Entrada no Telegram' AND invite_link = $1 ORDER BY id ASC LIMIT 1`, [inviteLinkUsado]);
                 if (res.rows.length > 0) rastroEncontrado = res.rows[0];
             }
 
+            // 2. Fallback cego (Idêntico ao bot antigo, previne qualquer falha de ID de grupo)
             if (!rastroEncontrado) {
-                const res = await pool.query(
-                    `SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' AND (group_id = $1 OR group_id = $2 OR group_id = $3) ORDER BY id ASC LIMIT 1`,
-                    [chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]
-                );
+                const res = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
                 if (res.rows.length > 0) rastroEncontrado = res.rows[0];
             }
 
@@ -199,27 +194,38 @@ app.post('/telegram-webhook', async (req, res) => {
                 enviarWebhookDiscord(conteudoLog);
             } 
             else {
-                const resExistente = await pool.query(
-                    `SELECT * FROM rastro_eterno WHERE telegram_id = $1 AND (group_id = $2 OR group_id = $3 OR group_id = $4) ORDER BY id DESC LIMIT 1`, 
-                    [telegramId, chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]
-                );
+                // CORREÇÃO: Envia o Log mesmo se for você testando com uma conta antiga!
+                const resExistente = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
                 
                 if (resExistente.rows.length > 0) {
-                    await pool.query(`UPDATE rastro_eterno SET data_entrada_telegram = $1, status_atual = 'No Grupo' WHERE id = $2`, [dataHoraAtual, resExistente.rows[0].id]);
+                    const row = resExistente.rows[0];
+                    await pool.query(`UPDATE rastro_eterno SET data_entrada_telegram = $1, status_atual = 'No Grupo' WHERE id = $2`, [dataHoraAtual, row.id]);
+
+                    const conteudoLog = `## LOGS DE RESGATE\n\n` +
+                        `<:theboxez:1543426459165532292> **| PRODUTO:** ${row.produto}\n` +
+                        `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${row.key_usada}\`\n\n` +
+                        `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
+                        `> **DC USER:** <@${row.discord_id}>\n` +
+                        `> **DC ID:** \`${row.discord_id}\`\n` +
+                        `> **TG USER:** ${telegramUsername}\n` +
+                        `> **TG ID:** \`${telegramId}\`\n\n` +
+                        `<:calendar:1543440066209120387> **| DATA:** \`${dataBr}\`\n` +
+                        `<:relogio_StorM:1531049138291216414> **| HORA:** \`${horaBr}\``;
+
+                    enviarWebhookDiscord(conteudoLog);
                 } else {
                     enviarWebhookDiscord(`⚠️ **[LOG TELEGRAM - ENTRADA SEM REGISTRO]**\nUsuário ${telegramUsername} (\`ID: ${telegramId}\`) entrou no grupo, mas nenhuma Key foi encontrada para ele.`);
                 }
             }
         } 
         else if (saiuDoGrupo) {
-            const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 AND (group_id = $2 OR group_id = $3 OR group_id = $4) ORDER BY id DESC LIMIT 1`, [telegramId, chatId, chatId.replace('-100', '-'), chatId.replace('-100', '')]);
+            const resSaida = await pool.query(`SELECT * FROM rastro_eterno WHERE telegram_id = $1 ORDER BY id DESC LIMIT 1`, [telegramId]);
             if (resSaida.rows.length > 0) {
                 const row = resSaida.rows[0];
                 await pool.query(`UPDATE rastro_eterno SET data_saida_telegram = $1, status_atual = 'Saiu do Grupo' WHERE id = $2`, [dataHoraAtual, row.id]);
                 
                 const conteudoLog = `## LOG DE SAÍDA\n\n` +
-                    `<:theboxez:1543426459165532292> **| PRODUTO:** ${row.produto}\n` +
-                    `<:emoji_49:1543470661744201868> **| KEY UTILIZADA:** \`${row.key_usada}\`\n\n` +
+                    `<:theboxez:1543426459165532292> **| SAÍDA DE:** ${row.produto}\n` +
                     `<:info:1543491941314863239> **| INFORMAÇÕES**\n\n` +
                     `> **DC USER:** <@${row.discord_id}>\n` +
                     `> **DC ID:** \`${row.discord_id}\`\n` +
@@ -349,7 +355,6 @@ client.on('interactionCreate', async interaction => {
 
                 await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
 
-                // ENVIO DO LOG VISUAL IDENTICO À IMAGEM 3
                 enviarWebhookDiscord(
                     `## LOGS DE RESGATE\n\n` +
                     `<:theboxez:1543426459165532292> **| PRODUTO:** ${nomeProduto}\n` +
