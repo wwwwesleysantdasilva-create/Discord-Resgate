@@ -345,6 +345,9 @@ client.on('interactionCreate', async interaction => {
                     [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram']
                 );
 
+                // NOVO: Registrando log de resgate de key
+                await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
+
                 const containerDM = new ContainerBuilder().addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e expira em 15 minutos.**`)
                 );
@@ -374,10 +377,18 @@ client.on('interactionCreate', async interaction => {
             const groupID = interaction.fields.getTextInputValue('prod_group').trim();
             
             await pool.query(`INSERT INTO products (id, name, group_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $2, group_id = $3`, [prodId, prodName, groupID]);
+            
+            // NOVO: Registrando log de adição/edição de produto
+            await registrarLog(`Cadastrou/Atualizou o produto ${prodId}`, usuario);
+            
             interaction.reply({ content: `✅ Produto \`${prodId}\` cadastrado!`, flags: MessageFlags.Ephemeral });
         } else if (modalId === 'modal_del_produto') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
             await pool.query(`DELETE FROM products WHERE id = $1`, [prodId]);
+            
+            // NOVO: Registrando log de exclusão de produto
+            await registrarLog(`Removeu o produto ${prodId}`, usuario);
+            
             interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido!`, flags: MessageFlags.Ephemeral });
         } else if (modalId === 'modal_gerar_keys') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
@@ -396,6 +407,9 @@ client.on('interactionCreate', async interaction => {
                 await pool.query(`INSERT INTO keys (key, product, group_id, used, created_at) VALUES ($1, $2, $3, 0, $4)`, [keyFinal, prodId, produto.group_id, dataHora]);
                 keysGeradas.push(`\`${keyFinal}\``);
             }
+
+            // NOVO: Registrando log de geração de keys
+            await registrarLog(`Gerou ${qtd} key(s) para o produto ${prodId}`, usuario);
 
             interaction.reply({ content: `✅ **${qtd} Key(s) gerada(s)!**\n\n${keysGeradas.join('\n')}`, flags: MessageFlags.Ephemeral });
         }
