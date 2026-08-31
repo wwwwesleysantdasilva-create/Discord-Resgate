@@ -5,7 +5,7 @@ if (dns.setDefaultResultOrder) {
     dns.setDefaultResultOrder('ipv4first');
 }
 
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, AttachmentBuilder } = require('discord.js');
 const { Pool } = require('pg');
 const axios = require('axios');
 const express = require('express');
@@ -20,7 +20,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 const CANAL_LOGS_ID = '1543481715601969162';
 
-app.get('/', (req, res) => res.send('🤖 Bot online com Sistema de Arquivos de Log!'));
+app.get('/', (req, res) => res.send('🤖 Bot online!'));
 
 // CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
@@ -86,16 +86,12 @@ async function registrarLog(acao, usuario) {
     } catch (e) { console.error('Erro ao registrar log interno:', e.message); }
 }
 
-// FUNÇÃO PARA ENVIAR O LOG COM ARQUIVO .TXT IDÊNTICO ÀS SUAS IMAGENS PARA O CANAL DO DISCORD
+// FUNÇÃO PARA ENVIAR O LOG COM ARQUIVO .TXT PARA O CANAL DO DISCORD
 async function enviarLogComArquivoDiscord(dados) {
     try {
         const canal = await client.channels.fetch(CANAL_LOGS_ID);
-        if (!canal) {
-            console.error('❌ Canal de logs do Discord não encontrado!');
-            return;
-        }
+        if (!canal) return;
 
-        // Monta o conteúdo exato do arquivo .txt baseado na sua imagem
         const conteudoTxt = 
 `===== LOG DE ATENDIMENTO =====
 
@@ -121,7 +117,6 @@ ${dados.dataHora}`;
 
         const arquivoAnexo = new AttachmentBuilder(nomeArquivo);
 
-        // Mensagem rica idêntica à imagem 12
         const mensagemTexto = 
 `✅ **NOVO RESGATE CONFIRMADO**
 📦 Produto: ⚙️ ${dados.produto}
@@ -133,16 +128,14 @@ ${dados.dataHora}`;
             files: [arquivoAnexo]
         });
 
-        // Limpa o arquivo temporário local
         fs.unlinkSync(nomeArquivo);
-        console.log('✅ Log com arquivo .txt enviado com sucesso para o canal do Discord!');
     } catch (err) {
-        console.error('❌ Erro ao enviar arquivo de log para o Discord:', err.message);
+        console.error('Erro ao enviar arquivo de log:', err.message);
     }
 }
 
 // ---------------------------------------------------------
-// ROTA /telegram-webhook: RECEBE DO SEU OUTRO BOT / TELEGRAM
+// ROTA TELEGRAM
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
@@ -150,7 +143,7 @@ app.post('/telegram-webhook', async (req, res) => {
         const chatMemberEvent = update.chat_member || update.my_chat_member;
 
         if (chatMemberEvent) {
-            const user = chatMemberEvent.new_chat_member?.user || update.chat_member?.from;
+            const user = chatMemberEvent.new_chat_member?.user || chatMemberEvent.from;
             if (user && user.is_bot) return res.status(200).send('OK');
 
             if (user) {
@@ -166,7 +159,6 @@ app.post('/telegram-webhook', async (req, res) => {
                     const agora = new Date();
                     const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-                    // Busca o último resgate pendente na fila
                     const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
                     
                     if (resAguardando.rows.length > 0) {
@@ -176,7 +168,6 @@ app.post('/telegram-webhook', async (req, res) => {
                             [telegramId, telegramUsername, dataHoraAtual, rastro.id]
                         );
 
-                        // Dispara a função que cria o .txt e manda pro Discord no canal 1543481715601969162
                         await enviarLogComArquivoDiscord({
                             telegramNome: telegramNome,
                             telegramUsername: telegramUsername,
@@ -228,8 +219,7 @@ client.once('clientReady', async () => {
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'painel') {
-            const container = new ActionRowBuilder(); // Mantém compatibilidade
-            // ... painel admin padrão ...
+            const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('### <:mundo_StorM:1530945775679307786> | Dashboard \n\n——————'));
             const row1 = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('btn_gerar_keys').setLabel('Gerar keys').setStyle(ButtonStyle.Secondary).setEmoji('1543439616328204408'),
                 new ButtonBuilder().setCustomId('btn_registros').setLabel('Registros').setStyle(ButtonStyle.Secondary).setEmoji('1543438969641898124')
@@ -238,11 +228,12 @@ client.on('interactionCreate', async interaction => {
                 new ButtonBuilder().setCustomId('btn_add_produto').setLabel('Add produto').setStyle(ButtonStyle.Secondary).setEmoji('1532944991423565844'),
                 new ButtonBuilder().setCustomId('btn_remover_produto').setLabel('Remover produto').setStyle(ButtonStyle.Secondary).setEmoji('1543438189136715857')
             );
-            await interaction.reply({ content: '### <:mundo_StorM:1530945775679307786> | Dashboard \n\n——————', components: [row1, row2], flags: MessageFlags.Ephemeral });
+            await interaction.reply({ components: [container, row1, row2], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
         }
         if (interaction.commandName === 'setarpainel') {
+            const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('## <:theboxez:1543426459165532292> Resgatar Pack\n\nClique no botão abaixo para validar sua key e obter acesso ao seu pack instantaneamente.'));
             const linha = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_resgate_cliente').setLabel('Resgatar').setStyle(ButtonStyle.Success).setEmoji('1543426459165532292'));
-            await interaction.channel.send({ content: '## <:theboxez:1543426459165532292> Resgatar Pack\n\nClique no botão abaixo para validar sua key e obter acesso ao seu pack instantaneamente.', components: [linha] });
+            await interaction.channel.send({ components: [container, linha], flags: MessageFlags.IsComponentsV2 });
             await interaction.reply({ content: '✅ Painel enviado!', flags: MessageFlags.Ephemeral });
         }
     } 
@@ -283,7 +274,7 @@ client.on('interactionCreate', async interaction => {
             const resKey = await pool.query(`SELECT * FROM keys WHERE key = $1`, [keyDigitada]);
             const row = resKey.rows[0];
 
-            if (!row || row.used === 1) return interaction.editReply('❌ **Key inválida ou já utilizada.**');
+            if (!row || row.used === 1) return interaction.editReply('<:cloner_warning:1543647603059859506>  **Key inválida ou já utilizada.**');
 
             const resProd = await pool.query(`SELECT name FROM products WHERE id = $1`, [row.product]);
             const produto = resProd.rows[0];
@@ -295,28 +286,31 @@ client.on('interactionCreate', async interaction => {
                 });
 
                 const linkExclusivo = respostaTelegram.data.result.invite_link;
-                const dataHoraResgate = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+                const agora = new Date();
+                const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                 await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
-                
                 await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                     [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]
                 );
 
                 await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
 
+                const containerDM = new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e expira em 15 minutos.**`)
+                );
+                
                 let mensagemDMUrl = '';
                 try {
-                    const msgDM = await interaction.user.send({ 
-                        content: `✅ **Acesso Liberado com Sucesso!**\n\n📦 **Produto:** ${nomeProduto}\n🔑 **Key:** \`${keyDigitada}\`\n\nAqui está o seu link exclusivo:\n🔗 ${linkExclusivo}\n\n⚠️ *Este link serve apenas para 1 pessoa e expira em 15 minutos.*` 
-                    });
+                    const msgDM = await interaction.user.send({ components: [containerDM, new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Acessar o pack').setStyle(ButtonStyle.Link).setURL(linkExclusivo))], flags: MessageFlags.IsComponentsV2 });
                     mensagemDMUrl = msgDM.url;
                 } catch (dmError) {
                     return interaction.editReply('⚠️ Key validada, mas **suas DMs estão fechadas**!');
                 }
 
                 await interaction.editReply({
-                    content: '✅ **Key Validada com Sucesso!** Verifique sua **DM (Mensagem privada)** para acessar o link.'
+                    content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**',
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Ver dm').setStyle(ButtonStyle.Link).setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`))]
                 });
 
             } catch (error) { 
