@@ -5,22 +5,16 @@ if (dns.setDefaultResultOrder) {
     dns.setDefaultResultOrder('ipv4first');
 }
 
-const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { Pool } = require('pg');
-const axios = require('axios');
 const express = require('express');
-const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
-const CANAL_LOGS_ID = '1543481715601969162';
 
-app.get('/', (req, res) => res.send('🤖 Bot online!'));
+app.get('/', (req, res) => res.send('🤖 Bot online e limpo!'));
 
 // CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
@@ -52,24 +46,7 @@ async function inicializarBanco() {
                 "user" TEXT,
                 timestamp TEXT
             );
-            CREATE TABLE IF NOT EXISTS rastro_eterno (
-                id SERIAL PRIMARY KEY,
-                discord_id TEXT,
-                discord_tag TEXT,
-                telegram_id TEXT,
-                telegram_user TEXT,
-                produto TEXT,
-                group_id TEXT,
-                key_usada TEXT,
-                data_resgate TEXT,
-                data_entrada_telegram TEXT,
-                data_saida_telegram TEXT,
-                status_atual TEXT,
-                invite_link TEXT
-            );
         `);
-        
-        try { await pool.query(`ALTER TABLE rastro_eterno ADD COLUMN invite_link TEXT;`); } catch (e) { }
         console.log('✅ Tabelas no Supabase prontas!');
     } catch (dbError) {
         console.error('❌ Erro ao conectar no Supabase:', dbError.message);
@@ -86,125 +63,8 @@ async function registrarLog(acao, usuario) {
     } catch (e) { console.error('Erro ao registrar log interno:', e.message); }
 }
 
-// FUNÇÃO PARA ENVIAR O LOG COM ARQUIVO .TXT PARA O CANAL DO DISCORD
-async function enviarLogComArquivoDiscord(dados) {
-    try {
-        const canal = await client.channels.fetch(CANAL_LOGS_ID);
-        if (!canal) return;
-
-        const conteudoTxt = 
-`===== LOG DE ATENDIMENTO =====
-
-Usuário:
-Nome: ${dados.telegramNome}
-Username: ${dados.telegramUsername}
-ID: ${dados.telegramId}
-
-Produto:
-⚙️ ${dados.produto}
-
-Key:
-${dados.keyUsada} (VÁLIDA)
-
-Grupo Liberado:
-${dados.groupId}
-
-Horário Entrada (CONFIRMADO):
-${dados.dataHora}`;
-
-        const nomeArquivo = `log_${dados.telegramId}_${Date.now()}.txt`;
-        fs.writeFileSync(nomeArquivo, conteudoTxt);
-
-        const arquivoAnexo = new AttachmentBuilder(nomeArquivo);
-
-        const mensagemTexto = 
-`✅ **NOVO RESGATE CONFIRMADO**
-📦 Produto: ⚙️ ${dados.produto}
-👤 Cliente: ${dados.telegramNome}
-🕒 Hora: ${dados.dataHora}`;
-
-        await canal.send({
-            content: mensagemTexto,
-            files: [arquivoAnexo]
-        });
-
-        fs.unlinkSync(nomeArquivo);
-    } catch (err) {
-        console.error('Erro ao enviar arquivo de log:', err.message);
-    }
-}
-
-// ---------------------------------------------------------
-// ROTA TELEGRAM
-// ---------------------------------------------------------
-app.post('/telegram-webhook', async (req, res) => {
-    try {
-        const update = req.body;
-        const chatMemberEvent = update.chat_member || update.my_chat_member;
-
-        if (chatMemberEvent) {
-            const user = chatMemberEvent.new_chat_member?.user || chatMemberEvent.from;
-            if (user && user.is_bot) return res.status(200).send('OK');
-
-            if (user) {
-                const telegramId = user.id.toString();
-                const telegramUsername = user.username ? `@${user.username}` : '@N/A';
-                const telegramNome = user.first_name || 'Desconhecido';
-                const newStatus = chatMemberEvent.new_chat_member?.status;
-                const oldStatus = chatMemberEvent.old_chat_member?.status;
-                
-                const entrou = ['member', 'administrator', 'creator'].includes(newStatus) && !['member', 'administrator', 'creator'].includes(oldStatus);
-
-                if (entrou) {
-                    const agora = new Date();
-                    const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-                    const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
-                    
-                    if (resAguardando.rows.length > 0) {
-                        const rastro = resAguardando.rows[0];
-                        
-                        await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, 
-                            [telegramId, telegramUsername, dataHoraAtual, rastro.id]
-                        );
-
-                        await enviarLogComArquivoDiscord({
-                            telegramNome: telegramNome,
-                            telegramUsername: telegramUsername,
-                            telegramId: telegramId,
-                            produto: rastro.produto,
-                            keyUsada: rastro.key_usada,
-                            groupId: rastro.group_id,
-                            dataHora: dataHoraAtual
-                        });
-                    }
-                }
-            }
-        }
-        res.status(200).send('OK');
-    } catch (err) {
-        console.error('❌ Erro no webhook do telegram:', err.message);
-        res.status(500).send('Error');
-    }
-});
-
 client.once('clientReady', async () => {
     console.log(`Bot online como ${client.user.tag}`);
-    
-    if (TELEGRAM_TOKEN && RAILWAY_PUBLIC_DOMAIN) {
-        const domain = RAILWAY_PUBLIC_DOMAIN.startsWith('http') ? RAILWAY_PUBLIC_DOMAIN : `https://${RAILWAY_PUBLIC_DOMAIN}`;
-        const webhookUrl = `${domain}/telegram-webhook`;
-        try {
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { drop_pending_updates: false });
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
-                url: webhookUrl,
-                allowed_updates: ["message", "chat_member", "my_chat_member"]
-            });
-            console.log(`✅ Webhook Telegram atrelado com sucesso a: ${webhookUrl}`);
-        } catch (webhookErr) {
-            console.error('❌ Erro ao registrar Webhook no Telegram:', webhookErr.message);
-        }
-    }
 
     const commands = [
         new SlashCommandBuilder().setName('painel').setDescription('Painel adm').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
@@ -265,7 +125,6 @@ client.on('interactionCreate', async interaction => {
     else if (interaction.isModalSubmit()) {
         const modalId = interaction.customId;
         const usuario = interaction.user.tag;
-        const userId = interaction.user.id;
 
         if (modalId === 'modal_resgate') {
             const keyDigitada = interaction.fields.getTextInputValue('input_key').trim();
@@ -281,41 +140,22 @@ client.on('interactionCreate', async interaction => {
             const nomeProduto = produto ? produto.name : row.product;
 
             try {
-                const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
-                    chat_id: row.group_id, member_limit: 1, expire_date: Math.floor(Date.now() / 1000) + (60 * 15)
-                });
-
-                const linkExclusivo = respostaTelegram.data.result.invite_link;
-                const agora = new Date();
-                const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
                 await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
-                await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                    [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]
-                );
-
                 await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
 
                 const containerDM = new ContainerBuilder().addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e expira em 15 minutos.**`)
+                    new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\``)
                 );
-                
-                let mensagemDMUrl = '';
-                try {
-                    const msgDM = await interaction.user.send({ components: [containerDM, new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Acessar o pack').setStyle(ButtonStyle.Link).setURL(linkExclusivo))], flags: MessageFlags.IsComponentsV2 });
-                    mensagemDMUrl = msgDM.url;
-                } catch (dmError) {
-                    return interaction.editReply('⚠️ Key validada, mas **suas DMs estão fechadas**!');
-                }
+
+                await interaction.user.send({ components: [containerDM], flags: MessageFlags.IsComponentsV2 });
 
                 await interaction.editReply({
-                    content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**',
-                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Ver dm').setStyle(ButtonStyle.Link).setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`))]
+                    content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**'
                 });
 
             } catch (error) { 
                 console.error(error);
-                interaction.editReply('❌ Falha ao comunicar com o Telegram.'); 
+                interaction.editReply('❌ Falha ao processar a validação.'); 
             }
         }
         
