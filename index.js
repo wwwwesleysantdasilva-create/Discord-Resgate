@@ -147,10 +147,12 @@ client.on('interactionCreate', async interaction => {
                     new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\``)
                 );
 
-                await interaction.user.send({ components: [containerDM], flags: MessageFlags.IsComponentsV2 });
+                const msgDM = await interaction.user.send({ components: [containerDM], flags: MessageFlags.IsComponentsV2 });
+                const mensagemDMUrl = msgDM.url;
 
                 await interaction.editReply({
-                    content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**'
+                    content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**',
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Acessar').setStyle(ButtonStyle.Link).setURL(mensagemDMUrl))]
                 });
 
             } catch (error) { 
