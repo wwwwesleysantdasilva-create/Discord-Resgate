@@ -9,18 +9,16 @@ const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionR
 const { Pool } = require('pg');
 const axios = require('axios');
 const express = require('express');
-const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
-const CANAL_LOGS_ID = '1543481715601969162';
+const TELEGRAM_LOG_GROUP_ID = '-1003713776395';
 
-app.get('/', (req, res) => res.send('🤖 Bot online!'));
+app.get('/', (req, res) => res.send('🤖 Bot online! (Log Telegram Ativado)'));
 
 // CONEXÃO COM O SUPABASE (POSTGRESQL)
 const pool = new Pool({
@@ -86,56 +84,58 @@ async function registrarLog(acao, usuario) {
     } catch (e) { console.error('Erro ao registrar log interno:', e.message); }
 }
 
-// FUNÇÃO PARA ENVIAR O LOG COM ARQUIVO .TXT PARA O CANAL DO DISCORD
-async function enviarLogComArquivoDiscord(dados) {
+// ---------------------------------------------------------
+// FUNÇÃO: GERA O ARQUIVO .TXT E MANDA PRO GRUPO DO TELEGRAM
+// ---------------------------------------------------------
+async function enviarLogComArquivoTelegram(dados) {
+    if (!TELEGRAM_TOKEN) return;
     try {
-        const canal = await client.channels.fetch(CANAL_LOGS_ID);
-        if (!canal) return;
-
         const conteudoTxt = 
-`===== LOG DE ATENDIMENTO =====
+`===== LOG DE ATENDIMENTO (SISTEMA CRUZADO) =====
 
-Usuário:
+[ DADOS DO DISCORD ]
+Usuário: ${dados.discordTag}
+ID: ${dados.discordId}
+Menção: <@${dados.discordId}>
+
+[ DADOS DO TELEGRAM ]
 Nome: ${dados.telegramNome}
 Username: ${dados.telegramUsername}
 ID: ${dados.telegramId}
 
-Produto:
-⚙️ ${dados.produto}
+[ DADOS DO PRODUTO ]
+Produto: ⚙️ ${dados.produto}
+Key: ${dados.keyUsada} (VÁLIDA)
+Grupo Liberado: ${dados.groupId}
 
-Key:
-${dados.keyUsada} (VÁLIDA)
+[ HORÁRIOS ]
+Resgate da Key: ${dados.dataResgate}
+Entrada no Grupo: ${dados.dataEntrada}`;
 
-Grupo Liberado:
-${dados.groupId}
-
-Horário Entrada (CONFIRMADO):
-${dados.dataHora}`;
-
+        const mensagemTexto = `✅ <b>NOVO RESGATE E ENTRADA CONFIRMADOS</b>\n📦 <b>Produto:</b> ⚙️ ${dados.produto}\n🎮 <b>Discord:</b> ${dados.discordTag} (<code>${dados.discordId}</code>)\n📱 <b>Telegram:</b> ${dados.telegramNome}\n🕒 <b>Hora da Entrada:</b> ${dados.dataEntrada}`;
+        
+        // Monta o arquivo direto na memória (Buffer) para enviar via Axios sem dar erro no servidor
+        const boundary = '----BotBoundary' + Date.now();
         const nomeArquivo = `log_${dados.telegramId}_${Date.now()}.txt`;
-        fs.writeFileSync(nomeArquivo, conteudoTxt);
+        
+        const data = `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${TELEGRAM_LOG_GROUP_ID}\r\n` +
+                     `--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${mensagemTexto}\r\n` +
+                     `--${boundary}\r\nContent-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n` +
+                     `--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${nomeArquivo}"\r\nContent-Type: text/plain\r\n\r\n${conteudoTxt}\r\n` +
+                     `--${boundary}--\r\n`;
 
-        const arquivoAnexo = new AttachmentBuilder(nomeArquivo);
-
-        const mensagemTexto = 
-`✅ **NOVO RESGATE CONFIRMADO**
-📦 Produto: ⚙️ ${dados.produto}
-👤 Cliente: ${dados.telegramNome}
-🕒 Hora: ${dados.dataHora}`;
-
-        await canal.send({
-            content: mensagemTexto,
-            files: [arquivoAnexo]
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument`, Buffer.from(data, 'utf8'), {
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
         });
 
-        fs.unlinkSync(nomeArquivo);
+        console.log('✅ Log cruzado enviado para o grupo do Telegram com sucesso!');
     } catch (err) {
-        console.error('Erro ao enviar arquivo de log:', err.message);
+        console.error('❌ Erro ao enviar arquivo de log para o Telegram:', err.message);
     }
 }
 
 // ---------------------------------------------------------
-// ROTA TELEGRAM
+// ROTA TELEGRAM: CRUZAMENTO DE DADOS PELO INVITE LINK
 // ---------------------------------------------------------
 app.post('/telegram-webhook', async (req, res) => {
     try {
@@ -159,23 +159,38 @@ app.post('/telegram-webhook', async (req, res) => {
                     const agora = new Date();
                     const dataHoraAtual = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-                    const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
+                    let rastro = null;
+
+                    // 1. O CRUZAMENTO PERFEITO: Procura pelo link exato que o usuário clicou
+                    if (chatMemberEvent.invite_link && chatMemberEvent.invite_link.invite_link) {
+                        const linkUsado = chatMemberEvent.invite_link.invite_link;
+                        const resLink = await pool.query(`SELECT * FROM rastro_eterno WHERE invite_link = $1 AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id DESC LIMIT 1`, [linkUsado]);
+                        if (resLink.rows.length > 0) rastro = resLink.rows[0];
+                    }
+
+                    // 2. FALLBACK: Se o Telegram não mandar o link, puxa o último que gerou a key
+                    if (!rastro) {
+                        const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
+                        if (resAguardando.rows.length > 0) rastro = resAguardando.rows[0];
+                    }
                     
-                    if (resAguardando.rows.length > 0) {
-                        const rastro = resAguardando.rows[0];
-                        
+                    if (rastro) {
                         await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, 
                             [telegramId, telegramUsername, dataHoraAtual, rastro.id]
                         );
 
-                        await enviarLogComArquivoDiscord({
+                        // Dispara a criação do .txt e envio para o grupo do Telegram
+                        await enviarLogComArquivoTelegram({
+                            discordTag: rastro.discord_tag,
+                            discordId: rastro.discord_id,
                             telegramNome: telegramNome,
                             telegramUsername: telegramUsername,
                             telegramId: telegramId,
                             produto: rastro.produto,
                             keyUsada: rastro.key_usada,
                             groupId: rastro.group_id,
-                            dataHora: dataHoraAtual
+                            dataResgate: rastro.data_resgate,
+                            dataEntrada: dataHoraAtual
                         });
                     }
                 }
@@ -281,6 +296,7 @@ client.on('interactionCreate', async interaction => {
             const nomeProduto = produto ? produto.name : row.product;
 
             try {
+                // Ao resgatar, gera o link único no Telegram
                 const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
                     chat_id: row.group_id, member_limit: 1, expire_date: Math.floor(Date.now() / 1000) + (60 * 15)
                 });
@@ -290,6 +306,8 @@ client.on('interactionCreate', async interaction => {
                 const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
                 await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
+                
+                // Salva o linkExclusivo atrelado à Key no banco de rastreio
                 await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                     [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]
                 );
@@ -310,7 +328,7 @@ client.on('interactionCreate', async interaction => {
 
                 await interaction.editReply({
                     content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**',
-                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Ver dm').setStyle(ButtonStyle.Link).setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`))]
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Acessar').setStyle(ButtonStyle.Link).setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`))]
                 });
 
             } catch (error) { 
