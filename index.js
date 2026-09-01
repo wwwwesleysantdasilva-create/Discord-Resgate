@@ -5,8 +5,7 @@ if (dns.setDefaultResultOrder) {
     dns.setDefaultResultOrder('ipv4first');
 }
 
-// 1. ALTERAÇÃO AQUI: Adicionado o AttachmentBuilder no final desta linha
-const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { Pool } = require('pg');
 const axios = require('axios');
 const express = require('express');
@@ -310,13 +309,11 @@ client.on('interactionCreate', async interaction => {
             await pool.query(`DELETE FROM products WHERE id = $1`, [prodId]);
             await registrarLog(`Removeu o produto ${prodId}`, usuario);
             interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido!`, flags: MessageFlags.Ephemeral });
-            
-        // 2. ALTERAÇÃO AQUI: Novo bloco de gerar keys sem Timeout e com arquivo .txt
         } else if (modalId === 'modal_gerar_keys') {
             const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
             const qtd = parseInt(interaction.fields.getTextInputValue('quantidade')) || 1;
             
-            // Avisa o Discord para "pensar" (evita o erro de 3 segundos)
+            // CORREÇÃO DE BUG: Evitar que o bot trave por "Interaction Failed" ao gerar muitas keys
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             
             const resProd = await pool.query(`SELECT * FROM products WHERE id = $1`, [prodId]);
@@ -330,26 +327,13 @@ client.on('interactionCreate', async interaction => {
             for (let i = 0; i < qtd; i++) {
                 const keyFinal = `${prodId}-${Math.random().toString(36).substring(2, 10).toUpperCase()}` ;
                 await pool.query(`INSERT INTO keys (key, product, group_id, used, created_at) VALUES ($1, $2, $3, 0, $4)`, [keyFinal, prodId, produto.group_id, dataHora]);
-                keysGeradas.push(keyFinal); // Agora guarda sem as crases pra ficar limpo no .txt
+                keysGeradas.push(`\`${keyFinal}\``);
             }
             
             await registrarLog(`Gerou ${qtd} key(s) para o produto ${prodId}`, usuario);
             
-            // Se for até 10 keys, manda no próprio chat
-            if (qtd <= 10) {
-                const textoKeys = keysGeradas.map(k => `\`${k}\``).join('\n');
-                return interaction.editReply({ content: `✅ **${qtd} Key(s) gerada(s)!**\n\n${textoKeys}` });
-            } 
-            // Se for muita key, cria o arquivo .txt e envia
-            else {
-                const buffer = Buffer.from(keysGeradas.join('\n'), 'utf-8');
-                const arquivoTxT = new AttachmentBuilder(buffer, { name: `keys_${prodId}.txt` });
-                
-                return interaction.editReply({ 
-                    content: `✅ **${qtd} Key(s) gerada(s) com sucesso!**\nComo a quantidade é grande, enviei num arquivo de texto para não bugar o Discord:`, 
-                    files: [arquivoTxT] 
-                });
-            }
+            // CORREÇÃO DE BUG: Como usamos o deferReply para proteger o bot, enviamos a mensagem final em texto com o editReply
+            interaction.editReply({ content: `✅ **${qtd} Key(s) gerada(s)!**\n\n${keysGeradas.join('\n')}` });
         }
     }
 });
