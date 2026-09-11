@@ -270,7 +270,7 @@ client.on('interactionCreate', async interaction => {
 
             try {
                 const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
-                    chat_id: row.group_id, member_limit: 1, expire_date: Math.floor(Date.now() / 1000) + (60 * 15)
+                    chat_id: row.group_id, member_limit: 1
                 });
 
                 const linkExclusivo = respostaTelegram.data.result.invite_link;
@@ -281,7 +281,7 @@ client.on('interactionCreate', async interaction => {
                 await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]);
                 await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
 
-                const containerDM = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e expira em 15 minutos.**`));
+                const containerDM = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e fica inválido após o primeiro uso.**`));
                 
                 let mensagemDMUrl = '';
                 try {
