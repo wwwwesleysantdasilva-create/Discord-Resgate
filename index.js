@@ -42,18 +42,18 @@ const commands = [
 client.once('ready', async () => {
     console.log(`🤖 Bot online e autenticado como ${client.user.tag}!`);
 
-    // Registo automático dos comandos Slash na API do Discord
+    // Registro automático dos comandos Slash na API do Discord
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
     try {
-        console.log('🔄 A sincronizar comandos Slash com o Discord...');
+        console.log('🔄 Sincronizando comandos Slash com o Discord...');
         await rest.put(
             Routes.applicationCommands(client.user.id),
             { body: commands }
         );
-        console.log('✅ Comando /anunciar registado globalmente com sucesso!');
+        console.log('✅ Comando /anunciar registrado globalmente com sucesso!');
     } catch (error) {
-        console.error('❌ Erro ao registar comandos Slash:', error);
+        console.error('❌ Erro ao registrar comandos Slash:', error);
     }
 });
 
@@ -74,4 +74,13 @@ client.on('interactionCreate', async (interaction) => {
 
             // Tratamento caso o JSON venha envelopado na estrutura exportada do Discohook
             if (payload.messages && Array.isArray(payload.messages) && payload.messages.length > 0) {
-                payload = payload.messages[0].
+                payload = payload.messages[0].data || payload.messages[0];
+            }
+
+            // Remove propriedades incompatíveis com o método de envio se existirem
+            delete payload.attachments;
+
+            // 2. Dispara a mensagem com a estrutura formatada para o canal indicado
+            await canal.send(payload);
+
+            // 3. Confirma o envio com uma mensagem oculta visível
