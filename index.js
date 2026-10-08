@@ -33,8 +33,14 @@ const commands = [
         .addStringOption(option =>
             option
                 .setName('json')
-                .setDescription('O código JSON copiado do criador de mensagens (ex: Discohook)')
-                .setRequired(true)
+                .setDescription('Cole o código JSON do Discord Builders ou Discohook')
+                .setRequired(false) // Deixamos como false para permitir enviar o ficheiro em vez do texto
+        )
+        .addAttachmentOption(option =>
+            option
+                .setName('arquivo')
+                .setDescription('Anexe o ficheiro .json gerado (Opcional caso cole o texto)')
+                .setRequired(false)
         )
 ].map(command => command.toJSON());
 
@@ -64,36 +70,77 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'anunciar') {
         const canal = interaction.options.getChannel('canal');
         const jsonRaw = interaction.options.getString('json');
+        const arquivo = interaction.options.getAttachment('arquivo');
 
         // Resposta temporária oculta (ephemeral) para o bot não dar 'timeout'
         await interaction.deferReply({ ephemeral: true });
 
-        try {
-            // 1. Converte a string inserida num objeto JSON manipulável
-            let payload = JSON.parse(jsonRaw);
+        // Validação: o utilizador tem de enviar ou o texto ou o ficheiro
+        if (!jsonRaw && !arquivo) {
+            return interaction.editReply({
+                content: '❌ **Erro:** Tens de fornecer o código JSON colando-o na opção `json` OU enviando um `arquivo`.'
+            });
+        }
 
-            // Tratamento caso o JSON venha envelopado na estrutura exportada do Discohook
-            if (payload.messages && Array.isArray(payload.messages) && payload.messages.length > 0) {
-                payload = payload.messages[0].data || payload.messages[0];
+        try {
+            let jsonText = jsonRaw;
+
+            // Se foi enviado um ficheiro, o bot faz o download do conteúdo
+            if (arquivo) {
+                if (!arquivo.name.endsWith('.json')) {
+                    return interaction.editReply({ content: '❌ **Erro:** O ficheiro tem de ter a extensão `.json`.' });
+                }
+                const response = await fetch(arquivo.url);
+                jsonText = await response.text();
             }
 
-            // Sanitização do payload: limpa propriedades exclusivas de Webhook/Discohook que a API de Bot não aceita
+            // 1. Converte a string obtida num objeto JSON manipulável
+            let payload = JSON.parse(jsonText);
             const messageData = {};
 
-            if (payload.content) messageData.content = payload.content;
-            if (payload.embeds) messageData.embeds = payload.embeds;
+            // 2. Lógica para processar o JSON específico do Discord.Builders (com type: 17)
+            if (Array.isArray(payload) && payload[0]?.type === 17) {
+                const builderData = payload[0];
+                
+                // Mapear o conteúdo de texto (type: 10)
+                const textComponent = builderData.components?.find(c => c.type === 10);
+                if (textComponent && textComponent.content) {
+                    messageData.content = textComponent.content;
+                }
 
-            // Garante que o payload contenha ao menos texto ou embeds
-            if (!messageData.content && (!messageData.embeds || messageData.embeds.length === 0)) {
+                // Mapear a Action Row dos botões (type: 1)
+                const actionRows = builderData.components?.filter(c => c.type === 1);
+                if (actionRows && actionRows.length > 0) {
+                    messageData.components = actionRows;
+                }
+            } 
+            // 3. Lógica para o JSON padrão ou gerado pelo Discohook
+            else {
+                if (payload.messages && Array.isArray(payload.messages) && payload.messages.length > 0) {
+                    payload = payload.messages[0].data || payload.messages[0];
+                } else if (Array.isArray(payload)) {
+                    payload = payload[0]; // Capturar a primeira mensagem caso venha numa array limpa
+                }
+
+                // Sanitização padrão
+                if (payload.content) messageData.content = payload.content;
+                if (payload.embeds) messageData.embeds = payload.embeds;
+                
+                // Agora o bot também puxa a aba de botões (components) do JSON padrão
+                if (payload.components) messageData.components = payload.components;
+            }
+
+            // Garante que o payload contenha ao menos texto, embeds ou botões/componentes
+            if (!messageData.content && (!messageData.embeds || messageData.embeds.length === 0) && (!messageData.components || messageData.components.length === 0)) {
                 return interaction.editReply({
-                    content: '❌ **JSON Inválido:** O código precisa ter ao menos um texto (`content`) ou uma `embed` configurada.'
+                    content: '❌ **JSON Inválido:** O código precisa de ter ao menos um texto (`content`), uma `embed` ou `components` (botões) configurados.'
                 });
             }
 
-            // 2. Dispara a mensagem com a estrutura formatada para o canal indicado
+            // 4. Dispara a mensagem com a estrutura formatada para o canal indicado
             await canal.send(messageData);
 
-            // 3. Confirma o envio com uma mensagem oculta
+            // 5. Confirma o envio com uma mensagem oculta
             await interaction.editReply({ 
                 content: `✅ **Anúncio publicado com sucesso no canal** ${canal}!` 
             });
@@ -101,16 +148,14 @@ client.on('interactionCreate', async (interaction) => {
         } catch (error) {
             console.error('Erro ao processar a publicação do anúncio:', error);
 
-            // Resposta específica para erros de digitação/sintaxe no JSON
             if (error instanceof SyntaxError) {
                 return interaction.editReply({ 
-                    content: '❌ **Sintaxe JSON Inválida:** O código inserido contém erros de sintaxe. Certifique-se de que copiou o JSON completo.' 
+                    content: '❌ **Sintaxe JSON Inválida:** O código inserido contém erros de sintaxe ou o ficheiro está corrompido.' 
                 });
             }
 
-            // Resposta para falta de permissões ou parâmetros não aceitos pela API do Discord
             return interaction.editReply({ 
-                content: `❌ **Falha ao enviar:** ${error.message || 'Verifique se o bot tem permissão para enviar mensagens e links no canal escolhido.'}` 
+                content: `❌ **Falha ao enviar:** ${error.message || 'Verifica se o bot tem permissão para enviar mensagens e links no canal escolhido.'}` 
             });
         }
     }
