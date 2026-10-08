@@ -77,10 +77,44 @@ client.on('interactionCreate', async (interaction) => {
                 payload = payload.messages[0].data || payload.messages[0];
             }
 
-            // Remove propriedades incompatíveis com o método de envio se existirem
-            delete payload.attachments;
+            // Sanitização do payload: limpa propriedades exclusivas de Webhook/Discohook que a API de Bot não aceita
+            const messageData = {};
+
+            if (payload.content) messageData.content = payload.content;
+            if (payload.embeds) messageData.embeds = payload.embeds;
+
+            // Garante que o payload contenha ao menos texto ou embeds
+            if (!messageData.content && (!messageData.embeds || messageData.embeds.length === 0)) {
+                return interaction.editReply({
+                    content: '❌ **JSON Inválido:** O código precisa ter ao menos um texto (`content`) ou uma `embed` configurada.'
+                });
+            }
 
             // 2. Dispara a mensagem com a estrutura formatada para o canal indicado
-            await canal.send(payload);
+            await canal.send(messageData);
 
-            // 3. Confirma o envio com uma mensagem oculta visível
+            // 3. Confirma o envio com uma mensagem oculta
+            await interaction.editReply({ 
+                content: `✅ **Anúncio publicado com sucesso no canal** ${canal}!` 
+            });
+
+        } catch (error) {
+            console.error('Erro ao processar a publicação do anúncio:', error);
+
+            // Resposta específica para erros de digitação/sintaxe no JSON
+            if (error instanceof SyntaxError) {
+                return interaction.editReply({ 
+                    content: '❌ **Sintaxe JSON Inválida:** O código inserido contém erros de sintaxe. Certifique-se de que copiou o JSON completo.' 
+                });
+            }
+
+            // Resposta para falta de permissões ou parâmetros não aceitos pela API do Discord
+            return interaction.editReply({ 
+                content: `❌ **Falha ao enviar:** ${error.message || 'Verifique se o bot tem permissão para enviar mensagens e links no canal escolhido.'}` 
+            });
+        }
+    }
+});
+
+// Autenticação do bot no Discord
+client.login(process.env.DISCORD_TOKEN);
