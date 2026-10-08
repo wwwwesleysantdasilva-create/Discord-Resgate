@@ -1,344 +1,77 @@
+const { 
+    Client, 
+    GatewayIntentBits, 
+    REST, 
+    Routes, 
+    SlashCommandBuilder, 
+    PermissionFlagsBits, 
+    ChannelType 
+} = require('discord.js');
 require('dotenv').config();
-const dns = require('dns');
 
-if (dns.setDefaultResultOrder) {
-    dns.setDefaultResultOrder('ipv4first');
-}
-
-const { Client, GatewayIntentBits, ContainerBuilder, TextDisplayBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
-const { Pool } = require('pg');
-const axios = require('axios');
-const express = require('express');
-
-const app = express();
-app.use(express.json());
-
-const PORT = process.env.PORT || 3000;
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
-const TELEGRAM_LOG_GROUP_ID = '-1003713776395';
-
-app.get('/', (req, res) => res.send('🤖 Bot online! (Espião Ativado)'));
-
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
-    connectionTimeoutMillis: 10000,
-    idleTimeoutMillis: 30000
+// Inicialização do Bot com os privilégios necessários
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages
+    ]
 });
 
-async function inicializarBanco() {
-    try {
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS keys (
-                id SERIAL PRIMARY KEY,
-                key TEXT UNIQUE,
-                product TEXT,
-                group_id TEXT,
-                used INTEGER DEFAULT 0,
-                created_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS products (
-                id TEXT UNIQUE PRIMARY KEY,
-                name TEXT,
-                group_id TEXT
-            );
-            CREATE TABLE IF NOT EXISTS logs (
-                id SERIAL PRIMARY KEY,
-                action TEXT,
-                "user" TEXT,
-                timestamp TEXT
-            );
-            CREATE TABLE IF NOT EXISTS rastro_eterno (
-                id SERIAL PRIMARY KEY,
-                discord_id TEXT,
-                discord_tag TEXT,
-                telegram_id TEXT,
-                telegram_user TEXT,
-                produto TEXT,
-                group_id TEXT,
-                key_usada TEXT,
-                data_resgate TEXT,
-                data_entrada_telegram TEXT,
-                data_saida_telegram TEXT,
-                status_atual TEXT,
-                invite_link TEXT
-            );
-        `);
-        console.log('✅ Tabelas no Supabase prontas!');
-    } catch (dbError) {}
-}
-inicializarBanco();
+// Definição do comando Slash /anunciar
+const commands = [
+    new SlashCommandBuilder()
+        .setName('anunciar')
+        .setDescription('Envia um anúncio formatado via JSON para um canal selecionado.')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) // Restrito a Administradores
+        .addChannelOption(option =>
+            option
+                .setName('canal')
+                .setDescription('O canal de destino onde o anúncio será publicado')
+                .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+                .setRequired(true)
+        )
+        .addStringOption(option =>
+            option
+                .setName('json')
+                .setDescription('O código JSON copiado do criador de mensagens (ex: Discohook)')
+                .setRequired(true)
+        )
+].map(command => command.toJSON());
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+// Evento acionado quando o bot fica online
+client.once('ready', async () => {
+    console.log(`🤖 Bot online e autenticado como ${client.user.tag}!`);
 
-async function registrarLog(acao, usuario) {
-    try {
-        const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-        await pool.query(`INSERT INTO logs (action, "user", timestamp) VALUES ($1, $2, $3)`, [acao, usuario, dataHora]);
-    } catch (e) { }
-}
-
-async function enviarLogComArquivoTelegram(dados) {
-    if (!TELEGRAM_TOKEN) return;
-    try {
-        const conteudoTxt = 
-`===== LOG DE ATENDIMENTO =====
-
-[ DADOS DO DISCORD ]
-Usuário: ${dados.discordTag}
-ID: ${dados.discordId}
-
-[ DADOS DO TELEGRAM ]
-Nome: ${dados.telegramNome}
-Username: ${dados.telegramUsername}
-ID: ${dados.telegramId}
-
-[ DADOS DO PRODUTO ]
-Produto: ⚙️ ${dados.produto}
-Key: ${dados.keyUsada} (VÁLIDA)
-Grupo Liberado: ${dados.groupId}
-
-[ HORÁRIOS ]
-Resgate da Key: ${dados.dataResgate}
-Entrada no Grupo: ${dados.dataEntrada}`;
-
-        const mensagemTexto = `✅ <b>NOVO RESGATE E ENTRADA CONFIRMADOS</b>\n📦 <b>Produto:</b> ⚙️ ${dados.produto}\n🎮 <b>Discord:</b> ${dados.discordTag} (<code>${dados.discordId}</code>)\n📱 <b>Telegram:</b> ${dados.telegramNome} (<code>${dados.telegramId}</code>)\n🕒 <b>Entrada:</b> ${dados.dataEntrada}`;
-        
-        const boundary = '----BotBoundary' + Date.now();
-        const nomeArquivo = `log_${dados.telegramId}_${Date.now()}.txt`;
-        
-        const data = `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${TELEGRAM_LOG_GROUP_ID}\r\n` +
-                     `--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${mensagemTexto}\r\n` +
-                     `--${boundary}\r\nContent-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n` +
-                     `--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${nomeArquivo}"\r\nContent-Type: text/plain\r\n\r\n${conteudoTxt}\r\n` +
-                     `--${boundary}--\r\n`;
-
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument`, Buffer.from(data, 'utf8'), {
-            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
-        });
-        console.log('✅ Log enviada pro Telegram!');
-    } catch (err) { }
-}
-
-// ---------------------------------------------------------
-// ROTA TELEGRAM: COM O ESPIÃO ATIVADO
-// ---------------------------------------------------------
-app.post('/telegram-webhook', async (req, res) => {
-    console.log('\n👀 --- ESPIÃO DO TELEGRAM ---');
-    console.log(JSON.stringify(req.body, null, 2));
-    console.log('-----------------------------\n');
+    // Registo automático dos comandos Slash na API do Discord
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
     try {
-        const update = req.body;
-        const chatMemberEvent = update.chat_member || update.my_chat_member;
-
-        if (chatMemberEvent) {
-            const user = chatMemberEvent.new_chat_member?.user || chatMemberEvent.from;
-            if (user && user.is_bot) return res.status(200).send('OK');
-
-            if (user) {
-                const telegramId = user.id.toString();
-                const telegramUsername = user.username ? `@${user.username}` : '@N/A';
-                const telegramNome = user.first_name || 'Desconhecido';
-                const newStatus = chatMemberEvent.new_chat_member?.status;
-                const oldStatus = chatMemberEvent.old_chat_member?.status;
-                
-                const entrou = ['member', 'administrator', 'creator'].includes(newStatus) && !['member', 'administrator', 'creator'].includes(oldStatus);
-
-                if (entrou) {
-                    const dataHoraAtual = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-                    let rastro = null;
-
-                    if (chatMemberEvent.invite_link && chatMemberEvent.invite_link.invite_link) {
-                        const linkUsado = chatMemberEvent.invite_link.invite_link;
-                        const resLink = await pool.query(`SELECT * FROM rastro_eterno WHERE invite_link = $1 AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id DESC LIMIT 1`, [linkUsado]);
-                        if (resLink.rows.length > 0) rastro = resLink.rows[0];
-                    }
-
-                    if (!rastro) {
-                        const resAguardando = await pool.query(`SELECT * FROM rastro_eterno WHERE (telegram_id IS NULL OR telegram_id = '') AND status_atual = 'Aguardando Entrada no Telegram' ORDER BY id ASC LIMIT 1`);
-                        if (resAguardando.rows.length > 0) rastro = resAguardando.rows[0];
-                    }
-                    
-                    if (rastro) {
-                        await pool.query(`UPDATE rastro_eterno SET telegram_id = $1, telegram_user = $2, data_entrada_telegram = $3, status_atual = 'No Grupo' WHERE id = $4`, 
-                            [telegramId, telegramUsername, dataHoraAtual, rastro.id]
-                        );
-                        await enviarLogComArquivoTelegram({
-                            discordTag: rastro.discord_tag,
-                            discordId: rastro.discord_id,
-                            telegramNome: telegramNome,
-                            telegramUsername: telegramUsername,
-                            telegramId: telegramId,
-                            produto: rastro.produto,
-                            keyUsada: rastro.key_usada,
-                            groupId: rastro.group_id,
-                            dataResgate: rastro.data_resgate,
-                            dataEntrada: dataHoraAtual
-                        });
-                    }
-                }
-            }
-        }
-        res.status(200).send('OK');
-    } catch (err) {
-        res.status(500).send('Error');
+        console.log('🔄 A sincronizar comandos Slash com o Discord...');
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands }
+        );
+        console.log('✅ Comando /anunciar registado globalmente com sucesso!');
+    } catch (error) {
+        console.error('❌ Erro ao registar comandos Slash:', error);
     }
 });
 
-client.once('clientReady', async () => {
-    console.log(`Bot online como ${client.user.tag}`);
-    if (TELEGRAM_TOKEN && RAILWAY_PUBLIC_DOMAIN) {
-        const domain = RAILWAY_PUBLIC_DOMAIN.startsWith('http') ? RAILWAY_PUBLIC_DOMAIN : `https://${RAILWAY_PUBLIC_DOMAIN}`;
-        const webhookUrl = `${domain}/telegram-webhook`;
+// Evento acionado ao executar um comando no servidor
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    if (interaction.commandName === 'anunciar') {
+        const canal = interaction.options.getChannel('canal');
+        const jsonRaw = interaction.options.getString('json');
+
+        // Resposta temporária oculta (ephemeral) para o bot não dar 'timeout'
+        await interaction.deferReply({ ephemeral: true });
+
         try {
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`, { drop_pending_updates: false });
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
-                url: webhookUrl,
-                allowed_updates: ["message", "chat_member", "my_chat_member"]
-            });
-            console.log(`✅ Webhook atrelado com sucesso a: ${webhookUrl}`);
-        } catch (webhookErr) { }
-    }
+            // 1. Converte a string inserida num objeto JSON manipulável
+            let payload = JSON.parse(jsonRaw);
 
-    const commands = [
-        new SlashCommandBuilder().setName('painel').setDescription('Painel adm').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('setarpainel').setDescription('Painel clientes').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    ].map(command => command.toJSON());
-
-    try { for (const guild of client.guilds.cache.values()) await guild.commands.set(commands); } catch (error) { }
-});
-
-client.on('interactionCreate', async interaction => {
-    if (interaction.isChatInputCommand()) {
-        if (interaction.commandName === 'painel') {
-            const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('### <:mundo_StorM:1530945775679307786> | Dashboard \n\n——————'));
-            const row1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_gerar_keys').setLabel('Gerar keys').setStyle(ButtonStyle.Secondary).setEmoji('1543439616328204408'), new ButtonBuilder().setCustomId('btn_registros').setLabel('Registros').setStyle(ButtonStyle.Secondary).setEmoji('1543438969641898124'));
-            const row2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_add_produto').setLabel('Add produto').setStyle(ButtonStyle.Secondary).setEmoji('1532944991423565844'), new ButtonBuilder().setCustomId('btn_remover_produto').setLabel('Remover produto').setStyle(ButtonStyle.Secondary).setEmoji('1543438189136715857'));
-            await interaction.reply({ components: [container, row1, row2], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
-        }
-        if (interaction.commandName === 'setarpainel') {
-            const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('## <:theboxez:1543426459165532292> Resgatar Pack\n\nClique no botão abaixo para validar sua key e obter acesso ao seu pack instantaneamente.'));
-            const linha = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_resgate_cliente').setLabel('Resgatar').setStyle(ButtonStyle.Success).setEmoji('1543426459165532292'));
-            await interaction.channel.send({ components: [container, linha], flags: MessageFlags.IsComponentsV2 });
-            await interaction.reply({ content: '✅ Painel enviado!', flags: MessageFlags.Ephemeral });
-        }
-    } 
-    else if (interaction.isButton()) {
-        const id = interaction.customId;
-        if (id === 'btn_resgate_cliente') {
-            const modal = new ModalBuilder().setCustomId('modal_resgate').setTitle('Validação de Compra');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_key').setLabel('Cole a sua Key aqui:').setPlaceholder('Ex: SENSI-1234ABCD').setStyle(TextInputStyle.Short).setRequired(true)));
-            return await interaction.showModal(modal);
-        }
-        if (id === 'btn_add_produto') {
-            const modal = new ModalBuilder().setCustomId('modal_add_produto').setTitle('📦 Adicionar Novo Produto');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_id').setLabel('Código (Ex: SENSI)').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_name').setLabel('Nome').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_group').setLabel('ID Telegram').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
-        } else if (id === 'btn_remover_produto') {
-            const modal = new ModalBuilder().setCustomId('modal_del_produto').setTitle('🗑️ Remover Produto');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_id').setLabel('Código do Produto').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
-        } else if (id === 'btn_gerar_keys') {
-            const modal = new ModalBuilder().setCustomId('modal_gerar_keys').setTitle('🔑 Gerar Keys');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prod_id').setLabel('Código do Produto').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('quantidade').setLabel('Qtd Keys').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
-        } else if (id === 'btn_registros') {
-            const resLogs = await pool.query(`SELECT * FROM logs ORDER BY id DESC LIMIT 10`);
-            if (!resLogs.rows.length) return interaction.reply({ content: '📜 Nenhum registro.', flags: MessageFlags.Ephemeral });
-            await interaction.reply({ content: `📜 **Registros:**\n\n${resLogs.rows.map(r => `• **[${r.timestamp}]** ${r.user}: ${r.action}`).join('\n')}`, flags: MessageFlags.Ephemeral });
-        }
-    } 
-    else if (interaction.isModalSubmit()) {
-        const modalId = interaction.customId;
-        const usuario = interaction.user.tag;
-        const userId = interaction.user.id;
-
-        if (modalId === 'modal_resgate') {
-            const keyDigitada = interaction.fields.getTextInputValue('input_key').trim();
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-            const resKey = await pool.query(`SELECT * FROM keys WHERE key = $1`, [keyDigitada]);
-            const row = resKey.rows[0];
-
-            if (!row || row.used === 1) return interaction.editReply('<:cloner_warning:1543647603059859506>  **Key inválida ou já utilizada.**');
-
-            const resProd = await pool.query(`SELECT name FROM products WHERE id = $1`, [row.product]);
-            const produto = resProd.rows[0];
-            const nomeProduto = produto ? produto.name : row.product;
-
-            try {
-                const respostaTelegram = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/createChatInviteLink`, {
-                    chat_id: row.group_id, member_limit: 1
-                });
-
-                const linkExclusivo = respostaTelegram.data.result.invite_link;
-                const agora = new Date();
-                const dataHoraResgate = agora.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-                await pool.query(`UPDATE keys SET used = 1 WHERE key = $1`, [keyDigitada]);
-                await pool.query(`INSERT INTO rastro_eterno (discord_id, discord_tag, produto, group_id, key_usada, data_resgate, status_atual, invite_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [userId, usuario, nomeProduto, row.group_id.toString(), keyDigitada, dataHoraResgate, 'Aguardando Entrada no Telegram', linkExclusivo]);
-                await registrarLog(`Resgatou a key ${keyDigitada} do produto ${nomeProduto}`, usuario);
-
-                const containerDM = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`<:v_:1543470056304807938> **Acesso Liberado com Sucesso!**\n\n<:theboxez:1543426459165532292> **| Produto:** ${nomeProduto}\n<:emoji_49:1543470661744201868> **| Key:** \`${keyDigitada}\`\n\nAqui está o seu link:\n\n<:warn:1539069654922952774> **Serve apenas para 1 pessoa e fica inválido após o primeiro uso.**`));
-                
-                let mensagemDMUrl = '';
-                try {
-                    const msgDM = await interaction.user.send({ components: [containerDM, new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Acessar o pack').setStyle(ButtonStyle.Link).setURL(linkExclusivo))], flags: MessageFlags.IsComponentsV2 });
-                    mensagemDMUrl = msgDM.url;
-                } catch (dmError) { return interaction.editReply('⚠️ Key validada, mas **suas DMs estão fechadas**!'); }
-
-                await interaction.editReply({
-                    content: '<:v_:1543470056304807938>  **Key Validada!**\nVerifique sua **DM (Mensagem privada)**',
-                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Acessar').setStyle(ButtonStyle.Link).setURL(mensagemDMUrl || `https://discord.com/users/${client.user.id}`))]
-                });
-
-            } catch (error) { interaction.editReply('❌ Falha ao comunicar com o Telegram para gerar convite.'); }
-        }
-        
-        if (modalId === 'modal_add_produto') {
-            const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
-            const prodName = interaction.fields.getTextInputValue('prod_name').trim();
-            const groupID = interaction.fields.getTextInputValue('prod_group').trim();
-            await pool.query(`INSERT INTO products (id, name, group_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $2, group_id = $3`, [prodId, prodName, groupID]);
-            await registrarLog(`Cadastrou/Atualizou o produto ${prodId}`, usuario);
-            interaction.reply({ content: `✅ Produto \`${prodId}\` cadastrado!`, flags: MessageFlags.Ephemeral });
-        } else if (modalId === 'modal_del_produto') {
-            const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
-            await pool.query(`DELETE FROM products WHERE id = $1`, [prodId]);
-            await registrarLog(`Removeu o produto ${prodId}`, usuario);
-            interaction.reply({ content: `🗑️ Produto \`${prodId}\` removido!`, flags: MessageFlags.Ephemeral });
-        } else if (modalId === 'modal_gerar_keys') {
-            const prodId = interaction.fields.getTextInputValue('prod_id').toUpperCase().trim();
-            const qtd = parseInt(interaction.fields.getTextInputValue('quantidade')) || 1;
-            
-            // CORREÇÃO DE BUG: Evitar que o bot trave por "Interaction Failed" ao gerar muitas keys
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-            
-            const resProd = await pool.query(`SELECT * FROM products WHERE id = $1`, [prodId]);
-            const produto = resProd.rows[0];
-            
-            if (!produto) return interaction.editReply({ content: `❌ Produto não encontrado.` });
-            
-            const keysGeradas = [];
-            const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-            for (let i = 0; i < qtd; i++) {
-                const keyFinal = `${prodId}-${Math.random().toString(36).substring(2, 10).toUpperCase()}` ;
-                await pool.query(`INSERT INTO keys (key, product, group_id, used, created_at) VALUES ($1, $2, $3, 0, $4)`, [keyFinal, prodId, produto.group_id, dataHora]);
-                keysGeradas.push(`\`${keyFinal}\``);
-            }
-            
-            await registrarLog(`Gerou ${qtd} key(s) para o produto ${prodId}`, usuario);
-            
-            // CORREÇÃO DE BUG: Como usamos o deferReply para proteger o bot, enviamos a mensagem final em texto com o editReply
-            interaction.editReply({ content: `✅ **${qtd} Key(s) gerada(s)!**\n\n${keysGeradas.join('\n')}` });
-        }
-    }
-});
-
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor na porta ${PORT}`);
-    client.login(process.env.DISCORD_TOKEN);
-});
+            // Tratamento caso o JSON venha envelopado na estrutura exportada do Discohook
+            if (payload.messages && Array.isArray(payload.messages) && payload.messages.length > 0) {
+                payload = payload.messages[0].
